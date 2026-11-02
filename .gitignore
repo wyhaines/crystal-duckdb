@@ -9,3 +9,7 @@
 /shard.lock
 
 /.vscode/
+
+# Created by scripts/ci-local.sh and scripts/check-readme.sh
+/.cache/
+/.tmp/

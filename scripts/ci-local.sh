@@ -66,7 +66,8 @@ acquire_compile_lock
 url="https://github.com/duckdb/duckdb/releases/download/v$version/$archive"
 echo "Downloading $url"
 curl --fail --location --silent --show-error --retry 3 "$url" --output "$archive_path"
-if command -v sha256sum >/dev/null 2>&1; then
+# Choose by platform: recent macOS ships a BSD sha256sum without --strict.
+if [[ $platform == Linux ]]; then
   printf '%s  %s\n' "$sha256" "$archive_path" | sha256sum --check --strict
 else
   printf '%s  %s\n' "$sha256" "$archive_path" | shasum -a 256 --check

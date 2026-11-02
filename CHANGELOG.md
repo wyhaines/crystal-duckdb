@@ -20,6 +20,11 @@ All notable changes to this shard are documented here, following [Keep a Changel
 - When a parameter fails to convert, a prepared statement is prepared again once and every argument is rebound, so a cached statement survives a schema change that made its old parameter types reject the value.
 - The driver overrides crystal-db's `DB::MetadataValueConverter.arg_to_log(arg : Enumerable)` (identical in 0.13.1–0.15.0) so that recursive `DuckDB::Value` arrays compile when query arguments are logged. Its output format is unchanged.
 
+### Fixed
+
+- On Apple arm64, negative `Int8` and `Int16` values passed to DuckDB's C API arrived as large positive numbers: appending `-128_i8` into a SMALLINT column stored 128. Crystal passes 8- and 16-bit C arguments without sign or zero extension, which Apple's arm64 ABI requires of the caller. Every `bool`, `int8_t`, `int16_t`, `uint8_t` and `uint16_t` parameter in the bindings is now declared 32 bits wide, and values are widened before the call.
+- `scripts/ci-local.sh` verified archives with `sha256sum --strict` whenever a `sha256sum` existed; recent macOS ships a BSD `sha256sum` without that option. It now chooses the tool by platform.
+
 ## [0.3.0] - Unreleased
 
 ### Breaking

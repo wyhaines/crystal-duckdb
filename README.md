@@ -12,9 +12,9 @@ This is an actively maintained fork of [amauryt/crystal-duckdb](https://github.c
 
 | Component | Supported versions |
 | --- | --- |
-| DuckDB | 1.5.x and 2.0.x; Linux CI tests 1.5.6 and 2.0.0 |
+| DuckDB | 1.5.x and 2.0.x; CI tests 1.5.6 and 2.0.0 on Linux amd64 and macOS arm64 |
 | crystal-db | 0.13.1–0.15.x (`>= 0.13.1, < 0.16.0`) |
-| Crystal | ≥ 1.9.0; CI tests the minimum and latest release |
+| Crystal | ≥ 1.9.0; CI tests the minimum and latest release on Linux, and the latest on macOS |
 
 Historical shard/engine compatibility:
 
@@ -62,7 +62,7 @@ export LIBRARY_PATH="$PWD/duckdb-2.0.0${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export LD_LIBRARY_PATH="$PWD/duckdb-2.0.0${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ```
 
-On macOS, use `DYLD_LIBRARY_PATH` for the runtime path if the library is outside the loader's default search paths. The optional `duckdb/big` conversions also need GMP (`libgmp-dev` on Debian/Ubuntu, `brew install gmp` on macOS).
+On macOS, the official `libduckdb.dylib` has the install name `@rpath/libduckdb.dylib`, so give the executable an rpath instead of relying on `DYLD_LIBRARY_PATH` (System Integrity Protection strips `DYLD_*` variables when a protected program such as `/bin/sh` starts a child): `crystal build app.cr --link-flags "-L/path/to/duckdb -Wl,-rpath,/path/to/duckdb"`. The optional `duckdb/big` conversions also need GMP (`libgmp-dev` on Debian/Ubuntu, `brew install gmp` on macOS).
 
 ## Installation
 
@@ -458,13 +458,13 @@ See [bench/README.md](bench/README.md) for release-build commands, library paths
 - A cached prepared statement can't detect a stale parameter type after a schema change; see [Nested parameters and Appender values](#nested-parameters-and-appender-values).
 - crystal-db 0.13.1–0.15.0 pools can give one newly built connection to two fibers when the pool grows under parallel execution contexts. Pools created with `DB.open` on a DuckDB URI use a driver pool that avoids this; a manually constructed `DB::Database` or `DB::Pool` does not.
 - Windows is untested; upstream [issue #2](https://github.com/amauryt/crystal-duckdb/issues/2) reports abnormal termination.
-- macOS is not in CI. The spec suite's native-handle counters use GNU ld `--wrap`, so specs run on Linux.
+- The spec suite's native-handle counters use GNU ld `--wrap`, so they run on Linux only; elsewhere their assertions are reported as pending. Windows is untested.
 - DuckDB 1.4.x is not officially supported.
 - Streaming currently uses DuckDB's deprecated but exported v1 streaming entry point; the newer v2 C API is unstable.
 
 ## Contributing
 
-On Linux amd64, run a CI cell locally; the script downloads and verifies the pinned official library, installs shards, and runs the specs:
+On Linux amd64 or macOS, run a CI cell locally; the script downloads and verifies the pinned official library, installs shards, and runs the specs:
 
 ```sh
 scripts/ci-local.sh 1.5.6 "$PWD/.tmp/duckdb"
@@ -487,7 +487,7 @@ LIBRARY_PATH="$PWD/.tmp/duckdb/duckdb-2.0.0" \
 LD_LIBRARY_PATH="$PWD/.tmp/duckdb/duckdb-2.0.0" scripts/check-readme.sh
 ```
 
-Use the corresponding version directory for the other matrix cell. The example check is separate from `crystal spec` because it compiles every program independently. Include specs for behavior changes and keep both engine versions passing. Contributions go to [this fork](https://github.com/wyhaines/crystal-duckdb).
+On macOS, `check-readme.sh` adds the rpath itself; set only `LIBRARY_PATH`. To check the configuration without native-handle counters on Linux, run `crystal spec -Dno_native_lifetime`. Use the corresponding version directory for the other matrix cell. The example check is separate from `crystal spec` because it compiles every program independently. Include specs for behavior changes and keep both engine versions passing. Contributions go to [this fork](https://github.com/wyhaines/crystal-duckdb).
 
 ## Contributors
 
