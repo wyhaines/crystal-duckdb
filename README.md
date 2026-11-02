@@ -399,6 +399,7 @@ See [bench/README.md](bench/README.md) for release-build commands, library paths
 - Non-NULL VARIANT values raise, including inside nested values. NULL VARIANT reads return nil. Cast to a supported concrete SQL type.
 - Non-microsecond TZ Timestamp values cannot be bound or appended through the common C API, as described above.
 - Nested parameter/Appender construction is not implemented; use SQL constructors or casts with scalar parameters.
+- crystal-db 0.13.1–0.15.0 pools can give one newly built connection to two fibers when the pool grows under parallel execution contexts. Pools created with `DB.open` on a DuckDB URI use a driver pool that avoids this; a manually constructed `DB::Database` or `DB::Pool` does not.
 - Windows is untested; upstream [issue #2](https://github.com/amauryt/crystal-duckdb/issues/2) reports abnormal termination.
 - macOS is not in CI. The spec suite's native-handle counters use GNU ld `--wrap`, so specs run on Linux.
 - DuckDB 1.4.x is not officially supported.
