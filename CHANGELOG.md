@@ -6,7 +6,7 @@ All notable changes to this shard are documented here, following [Keep a Changel
 
 ### Breaking
 
-- Support targets DuckDB 1.5.x and 2.0.x. Older engines, including 1.4.x, are not officially supported. The minimum Crystal version is now 1.5.0; crystal-db must be `>= 0.13.1, < 0.16.0`.
+- Support targets DuckDB 1.5.x and 2.0.x. Older engines, including 1.4.x, are not officially supported. The minimum Crystal version is now 1.9.0; crystal-db must be `>= 0.13.1, < 0.16.0`.
 - Untyped reads return exact values instead of the old String fallback: DECIMAL becomes `DuckDB::Decimal`, UUID becomes `UUID`, UHUGEINT becomes `UInt128`, LIST/ARRAY become arrays, STRUCT/MAP become hashes, UNION returns its active member, timestamp variants become `DuckDB::Timestamp`, TIME_TZ becomes `DuckDB::TimeTZ`, BIT becomes a bit string, BIGNUM becomes `DuckDB::BigNum`, and GEOMETRY becomes WKB bytes. Use `DuckDB::Value` for recursive results; `DuckDB::Any` describes scalar parameters. Non-NULL VARIANT reads raise `DuckDB::Exception`; cast to a supported SQL type.
 - Date text preserves small years, BC dates, and infinities. Date and Timestamp conversion to Crystal Time raises `DuckDB::Exception` for infinity or years outside 1–9999. Calendar getters raise on infinity; Timestamp's `date` raises outside the DATE range.
 - TimeOfDay stores nanoseconds, preserves Time/Time::Span precision, and accepts SQL `24:00:00`. Invalid fields and negative or day-long spans raise `ArgumentError`. The existing Int64 and fourth field constructor arguments remain microseconds.

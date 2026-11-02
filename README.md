@@ -14,7 +14,7 @@ This is an actively maintained fork of [amauryt/crystal-duckdb](https://github.c
 | --- | --- |
 | DuckDB | 1.5.x and 2.0.x; Linux CI tests 1.5.6 and 2.0.0 |
 | crystal-db | 0.13.1–0.15.x (`>= 0.13.1, < 0.16.0`) |
-| Crystal | ≥ 1.5.0; CI tests the minimum and latest release |
+| Crystal | ≥ 1.9.0; CI tests the minimum and latest release |
 
 Historical shard/engine compatibility:
 

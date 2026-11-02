@@ -3,7 +3,8 @@ require "../spec_helper"
 describe DuckDB::Timestamp do
   describe "#initialize" do
     it "raises if time is not in UTC" do
-      time = Time.local
+      # Fixed offset: Time.local is UTC on CI runners (TZ=UTC).
+      time = Time.utc.in(Time::Location.fixed(-7 * 3600))
       expect_raises(ArgumentError) do
         timestamp = DuckDB::Timestamp.new(time)
       end

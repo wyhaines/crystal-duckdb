@@ -15,8 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # spec/spec_helper.cr uses File.delete?, introduced in Crystal 1.5.0.
-        crystal: [latest, '1.5.0']
+        # Oldest Crystal that install-crystal can set up on current runners (PCRE2,
+        # 1.8+) and that runs crystal-db's shared specs without skips (1.9+).
+        crystal: [latest, '1.9.0']
         # Archive names and SHA-256 digests are pinned in scripts/ci-local.sh.
         duckdb: ['1.5.6', '2.0.0']
     steps:
