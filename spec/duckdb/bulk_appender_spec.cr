@@ -378,6 +378,11 @@ describe "DuckDB columnar appending" do
         a.append_columns(values, [3] * values.size)
       end
       cnn.query_all("SELECT t FROM times", as: DuckDB::Timestamp).should eq(values * 3)
+      # A native fallback earlier in the row sends the TZ_NS value through the
+      # run-time constructor instead of a direct write.
+      cnn.exec "CREATE TABLE after_fallback (n BIGINT, t TIMESTAMPTZ_NS)"
+      cnn.appender("after_fallback") { |a| values.each { |v| a.row { |r| r << "4" << v } } }
+      cnn.query_all("SELECT t FROM after_fallback", as: DuckDB::Timestamp).should eq(values)
       cnn.exec "CREATE TABLE micros (t TIMESTAMPTZ)"
       expect_raises(DuckDB::Exception, /lose precision/) { cnn.appender("micros") { |a| a << values[0] } }
     end
