@@ -154,7 +154,12 @@ describe "DuckDB appender exact types and identifiers" do
       expect_raises(DuckDB::Exception, /closed/) { appender << DuckDB::BigNum.new(Bytes[0x80, 0, 1, 42]) }
       cnn.exec "CREATE TABLE tz_ns (v TIMESTAMP_NS)"
       value = DuckDB::Timestamp.from_nanoseconds(1_i128, timezone: true)
-      expect_raises(DuckDB::Exception, /unavailable/) { cnn.appender("tz_ns") { |a| a.row { |r| r << value } } }
+      if cnn.scalar("SELECT version()").as(String).starts_with?("v2.")
+        cnn.appender("tz_ns") { |a| a.row { |r| r << value } }
+        cnn.scalar("SELECT v FROM tz_ns").should eq(value)
+      else
+        expect_raises(DuckDB::Exception, /unavailable/) { cnn.appender("tz_ns") { |a| a.row { |r| r << value } } }
+      end
       native_lifetime { appender_handles.should eq(before) }
     end
   end

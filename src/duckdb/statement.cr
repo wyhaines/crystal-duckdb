@@ -99,8 +99,36 @@ class DuckDB::Statement < DB::Statement
     unless args.size == expected
       raise Exception.new("Expected #{expected} arguments, got #{args.size} for `#{@command}`")
     end
+    begin
+      bind_args_once(args)
+    rescue ValueBuilder::ConversionError
+      # Parameter metadata can remain stale after DDL. Retry conversion once on
+      # a fresh handle, rebinding every argument. If stale metadata accepts the
+      # value, execution uses DuckDB's casts and can still lose precision: create
+      # a fresh statement after schema changes when exactness is required.
+      refresh_preparation
+      bind_args_once(args)
+    end
+  end
+
+  private def bind_args_once(args : Enumerable)
     check LibDuckDB.clear_bindings(self)
     args.each_with_index(1) { |arg, index| bind_arg(index, arg) }
+  end
+
+  private def refresh_preparation
+    state = LibDuckDB.prepare(duckdb_connection, @command, out replacement)
+    unless state.success?
+      begin
+        error = LibDuckDB.prepare_error(replacement)
+        raise Exception.new(error.null? ? "Could not refresh prepared parameter types" : String.new(error))
+      ensure
+        LibDuckDB.destroy_prepare(pointerof(replacement))
+      end
+    end
+    previous = @statement
+    @statement = replacement
+    LibDuckDB.destroy_prepare(pointerof(previous))
   end
 
   private def bind_arg(index, value : Nil)
@@ -126,23 +154,47 @@ class DuckDB::Statement < DB::Statement
   end
 
   private def bind_arg(index, value : Decimal)
-    check LibDuckDB.bind_decimal(self, index, value)
+    with_parameter_type(index) do |destination, type|
+      if type.union?
+        bind_owned_value(index, ValueBuilder.build(value, destination))
+      else
+        scale = type.decimal? ? LibDuckDB.decimal_scale(destination) : 0_u8
+        ValueBuilder.check_decimal(value, type, scale)
+        check LibDuckDB.bind_decimal(self, index, value)
+      end
+    end
   end
 
   private def bind_arg(index, value : UUID)
-    raw = value.bytes.reduce(0_u128) { |acc, byte| (acc << 8) | byte.to_u128 }
-    bind_owned_value(index, LibDuckDB.create_uuid(HugeIntHelper.u128_to_uhuge(raw)))
+    bind_owned_value(index, ValueBuilder.scalar(value))
   end
 
   private def bind_arg(index, value : BigNum)
-    bytes = value.bytes[3..]
-    bytes.map! { |byte| ~byte } if value.negative?
-    native = LibDuckDB::BigNum.new(data: bytes.to_unsafe, size: bytes.size.to_u64, is_negative: value.negative? ? 1_u8 : 0_u8)
-    bind_owned_value(index, LibDuckDB.create_bignum(native))
+    bind_owned_value(index, ValueBuilder.scalar(value))
   end
 
   private def bind_arg(index, value : TimeTZ)
-    bind_owned_value(index, LibDuckDB.create_time_tz_value(value))
+    bind_owned_value(index, ValueBuilder.scalar(value))
+  end
+
+  private def with_parameter_type(index, &)
+    destination = LibDuckDB.param_logical_type(self, index)
+    begin
+      type = destination.null? ? LibDuckDB::Type::INVALID : LibDuckDB.get_type_id(destination)
+      yield destination, type
+    ensure
+      LibDuckDB.destroy_logical_type(pointerof(destination)) unless destination.null?
+    end
+  end
+
+  private def bind_nested_value(index, value)
+    with_parameter_type(index) do |destination, _|
+      bind_owned_value(index, ValueBuilder.build(value, destination))
+    end
+  end
+
+  private def bind_arg(index, value : Array | Slice | StaticArray | Hash | NamedTuple)
+    bind_nested_value(index, value)
   end
 
   private def bind_owned_value(index, value : LibDuckDB::Value)
@@ -171,38 +223,37 @@ class DuckDB::Statement < DB::Statement
   end
 
   private def bind_arg(index, value : TimeOfDay)
-    if value.nanoseconds % 1000 == 0
-      check LibDuckDB.bind_time(self, index, value)
-    else
-      bind_owned_value(index, LibDuckDB.create_time_ns(LibDuckDB::TimeNS.new(nanos: value.nanoseconds)))
+    with_parameter_type(index) do |destination, type|
+      if type.union?
+        bind_owned_value(index, ValueBuilder.build(value, destination))
+      else
+        ValueBuilder.check_precision(value.nanoseconds, type, "TimeOfDay")
+        if value.nanoseconds % 1000 == 0
+          check LibDuckDB.bind_time(self, index, value)
+        else
+          bind_owned_value(index, ValueBuilder.scalar(value))
+        end
+      end
     end
   end
 
   private def bind_arg(index, value : Timestamp)
-    if value.infinite? || (value.nanoseconds % 1000 == 0 && -Int64::MAX < value.nanoseconds // 1000 < Int64::MAX)
-      if value.timezone?
-        bind_owned_value(index, LibDuckDB.create_timestamp_tz(value.to_unsafe))
+    with_parameter_type(index) do |destination, type|
+      if type.union?
+        bind_owned_value(index, ValueBuilder.build(value, destination))
       else
-        check LibDuckDB.bind_timestamp(self, index, value)
-      end
-    else
-      nanos = value.nanoseconds
-      if value.timezone?
-        raise Exception.new("Nanosecond TIMESTAMP_TZ binding is unavailable in the DuckDB 1.5.6 v1 C API")
-      elsif -Int64::MAX < nanos < Int64::MAX
-        bind_owned_value(index, LibDuckDB.create_timestamp_ns(LibDuckDB::TimestampNS.new(nanos: nanos.to_i64)))
-      elsif nanos % 1_000_000 == 0 && -Int64::MAX < nanos // 1_000_000 < Int64::MAX
-        bind_owned_value(index, LibDuckDB.create_timestamp_ms(LibDuckDB::TimestampMS.new(millis: (nanos // 1_000_000).to_i64)))
-      elsif nanos % 1_000_000_000 == 0 && -Int64::MAX < nanos // 1_000_000_000 < Int64::MAX
-        bind_owned_value(index, LibDuckDB.create_timestamp_s(LibDuckDB::TimestampS.new(seconds: (nanos // 1_000_000_000).to_i64)))
-      else
-        raise Exception.new("Timestamp is outside DuckDB's range or cannot be bound exactly")
+        ValueBuilder.check_precision(value.nanoseconds, type, "Timestamp") unless value.infinite?
+        if !value.timezone? && (value.infinite? || (value.nanoseconds % 1000 == 0 && -Int64::MAX < value.nanoseconds // 1000 < Int64::MAX))
+          check LibDuckDB.bind_timestamp(self, index, value)
+        else
+          bind_owned_value(index, ValueBuilder.scalar(value))
+        end
       end
     end
   end
 
   private def bind_arg(index, value : Time)
-    bind_arg(index, Timestamp.new(value))
+    bind_owned_value(index, ValueBuilder.scalar(value))
   end
 
   private def bind_arg(index, value : Interval)
@@ -231,5 +282,41 @@ class DuckDB::Statement < DB::Statement
 
   def to_unsafe
     @statement
+  end
+end
+
+# :nodoc:
+module DuckDB::ParameterLog
+  def self.convert(arg : T) : ::Log::Metadata::Value forall T
+    {% if T.union? %}
+      {% for member in T.union_types %}
+        return convert(arg.as({{member}})) if arg.is_a?({{member}})
+      {% end %}
+      raise DuckDB::Exception.new("Unsupported log value")
+    {% elsif T < Tuple %}
+      values = [] of ::Log::Metadata::Value
+      {% for index in 0...T.type_vars.size %}
+        values << convert(arg[{{index}}])
+      {% end %}
+      ::Log::Metadata::Value.new(values)
+    {% elsif T < Enumerable && !(T < Range) %}
+      values = [] of ::Log::Metadata::Value
+      arg.each { |value| values << convert(value) }
+      ::Log::Metadata::Value.new(values)
+    {% elsif T == Int128 || T == UInt128 %}
+      ::Log::Metadata::Value.new(arg.to_s)
+    {% else %}
+      DB::MetadataValueConverter.arg_to_log(arg)
+    {% end %}
+  end
+end
+
+module DB::MetadataValueConverter
+  # :nodoc:
+  # Preserve crystal-db's metadata format while keeping recursive aliases out
+  # of its to_a/map intermediate and dispatching each union member explicitly.
+  # Re-check this crystal-db method's signature and formatting with every release.
+  def self.arg_to_log(arg : Enumerable) : ::Log::Metadata::Value
+    DuckDB::ParameterLog.convert(arg)
   end
 end

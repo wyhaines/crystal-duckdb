@@ -66,12 +66,41 @@ cases = {
     rescue DuckDB::Exception
     end
   },
+  "nested prepared query"    => ->(cnn : DB::Connection) {
+    value = {items: [1, nil, 2], labels: {"x" => [DuckDB::Decimal.new(123_i128, 10, 2), nil]}}
+    cnn.query("SELECT ?::STRUCT(items INTEGER[], labels MAP(VARCHAR, DECIMAL(10,2)[]))", value) { |rs| rs.each { rs.read } }
+  },
+  "failing nested bind"      => ->(cnn : DB::Connection) {
+    begin
+      cnn.exec("SELECT ?::STRUCT(items INTEGER[], amount DECIMAL(4,1))", {items: [1, nil, 2], amount: DuckDB::Decimal.new(123_i128, 4, 2)})
+    rescue DuckDB::Exception
+    end
+  },
+  "nested append"            => ->(cnn : DB::Connection) {
+    cnn.as(DuckDB::Connection).appender("nested_appended") do |a|
+      a.row { |r| r << {items: [1, nil, 2], labels: {"x" => [DuckDB::Decimal.new(123_i128, 10, 2), nil]}} }
+    end
+    # Drop deleted row-group storage as well as rows, so RSS measures handle
+    # lifetimes rather than DuckDB's retention of append/delete table storage.
+    cnn.exec "CREATE OR REPLACE TABLE nested_appended (v STRUCT(items INTEGER[], labels MAP(VARCHAR, DECIMAL(10,2)[])))"
+  },
+  "failing nested append"    => ->(cnn : DB::Connection) {
+    begin
+      cnn.as(DuckDB::Connection).appender("nested_appended") do |a|
+        a.row { |r| r << {items: [1, nil, 2], labels: {"x" => [DuckDB::Decimal.new(1234_i128, 10, 3), nil]}} }
+      end
+    rescue DuckDB::Exception
+    end
+  },
 }
 
 cases.each do |name, operation|
   # duckdb::memory: bypasses the original bracketed-host URI bug for the baseline.
   DB.connect "duckdb::memory:" do |cnn|
     cnn.exec("CREATE TABLE append_values (n BIGINT, d DECIMAL(18,3), label VARCHAR NOT NULL)")
+    if name.includes?("append")
+      cnn.exec "CREATE TABLE nested_appended (v STRUCT(items INTEGER[], labels MAP(VARCHAR, DECIMAL(10,2)[])))"
+    end
     100.times { operation.call(cnn) }
     GC.collect
     puts "#{name} (KiB), 0:#{rss_kib}"

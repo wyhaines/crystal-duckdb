@@ -344,6 +344,35 @@ module DuckDB
     fun append_value = duckdb_append_value(appender : Appender, value : Value) : State
     fun destroy_value = duckdb_destroy_value(value : Value*) : Void
 
+    # get_value_type borrows from the value; it must NOT be destroyed.
+    fun get_value_type = duckdb_get_value_type(value : Value) : LogicalType
+    fun param_logical_type = duckdb_param_logical_type(statement : PreparedStatement, index : Idx) : LogicalType
+    fun create_logical_type = duckdb_create_logical_type(type : Type) : LogicalType
+    fun create_list_type = duckdb_create_list_type(child : LogicalType) : LogicalType
+    fun create_array_type = duckdb_create_array_type(child : LogicalType, size : Idx) : LogicalType
+    fun create_map_type = duckdb_create_map_type(key : LogicalType, value : LogicalType) : LogicalType
+    fun create_struct_type = duckdb_create_struct_type(types : LogicalType*, names : LibC::Char**, count : Idx) : LogicalType
+    fun create_list_value = duckdb_create_list_value(child : LogicalType, values : Value*, count : Idx) : Value
+    fun create_array_value = duckdb_create_array_value(child : LogicalType, values : Value*, count : Idx) : Value
+    fun create_struct_value = duckdb_create_struct_value(type : LogicalType, values : Value*) : Value
+    fun create_map_value = duckdb_create_map_value(type : LogicalType, keys : Value*, values : Value*, count : Idx) : Value
+    fun create_union_value = duckdb_create_union_value(type : LogicalType, tag : Idx, value : Value) : Value
+    fun create_null_value = duckdb_create_null_value : Value
+    fun create_bool = duckdb_create_bool(value : CBool) : Value
+    {% for name in ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"] %}
+      fun create_{{name.id.downcase}} = duckdb_create_{{name.id.downcase}}(value : {{name.id}}) : Value
+    {% end %}
+    fun create_hugeint = duckdb_create_hugeint(value : HugeInt) : Value
+    fun create_uhugeint = duckdb_create_uhugeint(value : UHugeInt) : Value
+    fun create_float = duckdb_create_float(value : Float32) : Value
+    fun create_double = duckdb_create_double(value : Float64) : Value
+    fun create_varchar_length = duckdb_create_varchar_length(value : LibC::Char*, size : Idx) : Value
+    fun create_blob = duckdb_create_blob(value : UInt8*, size : Idx) : Value
+    fun create_date = duckdb_create_date(value : Date) : Value
+    fun create_time = duckdb_create_time(value : Time) : Value
+    fun create_timestamp = duckdb_create_timestamp(value : Timestamp) : Value
+    fun create_interval = duckdb_create_interval(value : Interval) : Value
+
     # # Memory allocation
 
     # Allocate [size] amounts of memory using the duckdb internal malloc function. Any memory allocated in this manner

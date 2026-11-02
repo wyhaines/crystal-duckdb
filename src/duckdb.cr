@@ -1,6 +1,7 @@
 require "db"
 require "uuid"
 require "./duckdb/appender"
+require "./duckdb/appender_nested"
 require "./duckdb/big_num"
 require "./duckdb/column_reader"
 require "./duckdb/chunk_view"
@@ -22,6 +23,7 @@ require "./duckdb/time_of_day"
 require "./duckdb/time_tz"
 require "./duckdb/timestamp"
 require "./duckdb/unprepared_statement"
+require "./duckdb/value_builder"
 require "./duckdb/vector"
 require "./duckdb/vector_view"
 require "./duckdb/version"
@@ -45,7 +47,7 @@ module DuckDB
 
   alias Scalar = Nil | Bool | Int8 | Int16 | Int32 | Int64 | Int128 | UInt8 | UInt16 | UInt32 | UInt64 | UInt128 | Float32 | Float64 | String | Bytes | UUID | Decimal | Date | TimeOfDay | TimeTZ | Timestamp | Interval | BigNum
   alias Value = Scalar | Array(Value) | Hash(String, Value) | Hash(Value, Value)
-  # Bindable scalar values used by crystal-db's shared driver specs. Nested
-  # containers are read values; they are not prepared-statement parameters.
+  # Scalar convenience union used by crystal-db's shared specs. Query/exec
+  # accept generic arguments, including containers, without requiring this alias.
   alias Any = Scalar | ::Time
 end

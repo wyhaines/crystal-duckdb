@@ -197,18 +197,7 @@ class DuckDB::Appender
         append(value) { LibDuckDB.append_timestamp(self, value) }
       end
     else
-      nanos = value.nanoseconds
-      if value.timezone?
-        raise Exception.new("Nanosecond TIMESTAMP_TZ appending is unavailable in the DuckDB 1.5.6 v1 C API")
-      elsif -Int64::MAX < nanos < Int64::MAX
-        append_owned_value(LibDuckDB.create_timestamp_ns(LibDuckDB::TimestampNS.new(nanos: nanos.to_i64)))
-      elsif nanos % 1_000_000 == 0 && -Int64::MAX < nanos // 1_000_000 < Int64::MAX
-        append_owned_value(LibDuckDB.create_timestamp_ms(LibDuckDB::TimestampMS.new(millis: (nanos // 1_000_000).to_i64)))
-      elsif nanos % 1_000_000_000 == 0 && -Int64::MAX < nanos // 1_000_000_000 < Int64::MAX
-        append_owned_value(LibDuckDB.create_timestamp_s(LibDuckDB::TimestampS.new(seconds: (nanos // 1_000_000_000).to_i64)))
-      else
-        raise Exception.new("Timestamp is outside DuckDB's range or cannot be appended exactly")
-      end
+      append_owned_value(ValueBuilder.scalar(value))
     end
     self
   end
@@ -240,21 +229,7 @@ class DuckDB::Appender
   # Appends an exact DECIMAL; reducing scale requires trailing zero digits.
   def <<(value : Decimal)
     to_unsafe
-    if @types[@column_index]?.try(&.decimal?)
-      scale = @scales[@column_index]
-      if value.scale > scale && value.value % (10_i128 ** (value.scale - scale)) != 0
-        raise Exception.new("Appending DECIMAL would lose fractional digits")
-      end
-    elsif type = @types[@column_index]?
-      case type
-      when .float?, .double?
-        raise Exception.new("Append Decimal to a DECIMAL column to preserve exactness")
-      when .tinyint?, .smallint?, .integer?, .bigint?, .hugeint?, .utinyint?, .usmallint?, .uinteger?, .ubigint?, .uhugeint?, .bignum?, .boolean?
-        if value.value % (10_i128 ** value.scale) != 0
-          raise Exception.new("Appending DECIMAL would lose fractional digits")
-        end
-      end
-    end
+    ValueBuilder.check_decimal(value, @types[@column_index]?, @scales[@column_index]? || 0_u8)
     return self if append_direct(value)
     append_owned_value(LibDuckDB.create_decimal(value))
   end
@@ -353,16 +328,7 @@ class DuckDB::Appender
 
   private def check_precision(nanos : Int, *, time : Bool = false)
     to_unsafe
-    type = @types[@column_index]?
-    unit = case type
-           when LibDuckDB::Type::TIMESTAMP_S then 1_000_000_000
-           when LibDuckDB::Type::TIMESTAMP_MS then 1_000_000
-           when LibDuckDB::Type::TIMESTAMP, LibDuckDB::Type::TIMESTAMP_TZ, LibDuckDB::Type::TIME, LibDuckDB::Type::TIME_TZ then 1000
-           else 1
-           end
-    if nanos % unit != 0
-      raise Exception.new("Appending #{time ? "TimeOfDay" : "Timestamp"} to #{type} would lose precision")
-    end
+    ValueBuilder.check_precision(nanos, @types[@column_index]?, time ? "TimeOfDay" : "Timestamp")
   end
 
   # Try the exact destination write before invoking a native converter.
