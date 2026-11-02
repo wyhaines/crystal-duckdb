@@ -32,3 +32,11 @@ jobs:
           export LIBRARY_PATH="$RUNNER_TEMP/duckdb/duckdb-${{ matrix.duckdb }}"
           export LD_LIBRARY_PATH="$LIBRARY_PATH"
           scripts/check-readme.sh
+      - name: Run execution-context specs with four workers
+        if: matrix.crystal == 'latest'
+        timeout-minutes: 3
+        env:
+          CRYSTAL_WORKERS: 4
+          LIBRARY_PATH: ${{ runner.temp }}/duckdb/duckdb-${{ matrix.duckdb }}
+          LD_LIBRARY_PATH: ${{ runner.temp }}/duckdb/duckdb-${{ matrix.duckdb }}
+        run: crystal spec spec/duckdb/execution_context_spec.cr

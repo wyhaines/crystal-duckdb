@@ -124,6 +124,12 @@ DB.open "#{DuckDB::IN_MEMORY}?max_pool_size=2" do |db|
 end
 ```
 
+### Concurrency and execution contexts
+
+Use a connection, and its results, streams and appenders, from one fiber at a time. Use a pool (`DB.open`), or one connection per fiber, for parallel work. Fibers may migrate between OS threads while holding these resources; sequential use is supported. Finish worker fibers before closing their pool.
+
+On Crystal 1.21 and later, execution contexts provide parallelism. The default context starts with parallelism 1; `Fiber::ExecutionContext.default.resize(4)` allows more fibers to run in parallel. DuckDB C calls block their calling OS thread and do not yield to Crystal's scheduler. Resizing alone did not reliably keep timers responsive in local measurements, so run long analytical queries in `Fiber::ExecutionContext::Isolated.new("analytics") { ... }` and wait with `join` when needed. DuckDB's own `threads` setting controls its query workers separately from Crystal's execution-context threads.
+
 ### In-memory databases
 
 `DuckDB::IN_MEMORY`, `duckdb://`, and `duckdb::memory:` open anonymous memory databases. Each standalone connection or pool gets its own database. For shared named memory, use `duckdb::memory:my_name` or `duckdb://%3Amemory%3Amy_name`. A name shares an instance across pools and standalone connections until its last user closes.

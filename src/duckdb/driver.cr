@@ -19,11 +19,19 @@ class DuckDB::Driver < DB::Driver
     def build : ::DB::Connection
       @mutex.synchronize do
         raise Exception.new("Database pool is closed") if @closed
-        database = @database
-        if database.nil? || database.closed?
-          database = @database = Database.new(@duckdb_options, retained: @pooled)
+        loop do
+          database = @database
+          if database.nil? || database.closed?
+            database = @database = Database.new(@duckdb_options, retained: @pooled)
+          end
+          begin
+            return Connection.new(@options, database, @duckdb_options.stream_results)
+          rescue Database::ClosedError
+            # The last standalone connection can disconnect after closed?
+            # but before connect takes the owner's mutex. Retry a fresh owner.
+            @database = nil
+          end
         end
-        Connection.new(@options, database, @duckdb_options.stream_results)
       end
     end
 

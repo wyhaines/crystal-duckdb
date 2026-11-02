@@ -163,7 +163,7 @@ typedef struct {
     char *error;
     void *internal;
 } spec_result;
-static int64_t chunks, logical_types, streaming_executions, fetched_chunks, acquired_types;
+static _Atomic int64_t chunks, logical_types, streaming_executions, fetched_chunks, acquired_types;
 int64_t spec_live_chunks(void) { return chunks; }
 int64_t spec_live_logical_types(void) { return logical_types; }
 int64_t spec_streaming_executions(void) { return streaming_executions; }
@@ -235,7 +235,7 @@ void __wrap_duckdb_destroy_extracted(void **extracted) {
 }
 
 /* Values used for exact parameter binding, plus dictionary allocation counts. */
-static int64_t owned_values, enum_dictionary_reads;
+static _Atomic int64_t owned_values, enum_dictionary_reads;
 int64_t spec_live_values(void) { return owned_values; }
 int64_t spec_enum_dictionary_reads(void) { return enum_dictionary_reads; }
 #define VALUE_WRAPPER(name, type) \

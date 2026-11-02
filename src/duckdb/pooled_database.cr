@@ -4,13 +4,15 @@ class DuckDB::PooledDatabase < DB::Database
   @connections_mutex = Mutex.new
   @connections = Set(DB::Connection).new
   @closed = false
-  @closing = false
   @initializing = true
 
   def initialize(options : DB::Connection::Options, pool_options : DB::Pool::Options, @builder : Driver::ConnectionBuilder)
+    @connection_options = options
+    @setup_connection = ->(conn : DB::Connection) { }
+    @pool = uninitialized DB::Pool(DB::Connection)
     @builder.retain_database
     begin
-      super(options, pool_options) { build_connection }
+      @pool = DuckDB::Pool.new(pool_options) { build_connection }
       @initializing = false
     rescue ex
       # The base pool can fail after building some initial connections, before
@@ -26,7 +28,31 @@ class DuckDB::PooledDatabase < DB::Database
       raise Exception.new("Database pool is closed") if @closed
       connection = @builder.build
       @connections_mutex.synchronize { @connections.add(connection) }
+      connection.auto_release = false
+      connection.context = self
+      begin
+        @setup_connection.call connection
+      rescue ex
+        connection.close
+        raise ex
+      end
       connection
+    end
+  end
+
+  def setup_connection(&proc : DB::Connection -> Nil)
+    @close_mutex.synchronize do
+      super do |connection|
+        # Idle connections have auto_release enabled by their last checkout.
+        # The setup callback owns them until it returns, just like a checkout.
+        auto_release = connection.auto_release
+        connection.auto_release = false
+        begin
+          proc.call(connection)
+        ensure
+          connection.auto_release = auto_release
+        end
+      end
     end
   end
 
@@ -41,15 +67,11 @@ class DuckDB::PooledDatabase < DB::Database
   def close
     @close_mutex.synchronize do
       return if @closed
-      @closing = true
       begin
-        error = close_connections
         super
-        raise error if error
       ensure
         @builder.close
         @closed = true
-        @closing = false
       end
     end
   end
@@ -67,11 +89,9 @@ class DuckDB::PooledDatabase < DB::Database
     error
   end
 
-  # Close a snapshot of our connections before DB::Pool#close clears its arrays.
-  # Connection#close otherwise removes entries from the array being iterated.
   def discard(connection : DB::Connection)
     @connections_mutex.synchronize { @connections.delete(connection) }
-    super unless @closing || @initializing
+    super unless @initializing
   end
 end
 

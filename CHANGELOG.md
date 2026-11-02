@@ -22,6 +22,7 @@ All notable changes to this shard are documented here, following [Keep a Changel
 
 ### Added
 
+- Execution-context concurrency and blocking specs, with usage guidance for parallel fibers and long analytical queries.
 - Opt-in streaming through the `stream_results` URI option and connection property. Unprepared single-statement SQL uses the streaming path; multiple statements and exec remain materialized. One active stream per connection is enforced: another prepare/query/exec raises without invalidating the original stream, even after changing the property. Exhausting or closing it releases the guard. Fetch-time errors propagate during iteration.
 - Block-scoped `Connection#each_chunk` and `PooledDatabase#each_chunk`, with bound arguments and an explicit per-call streaming override. Chunks expose row count, column metadata, typed vectors, nested traversal, and owned recursive values. Expired views raise; `with_string_bytes` and `with_bytes` borrow buffers only inside callbacks and keep them alive through callback exit.
 - Exact Decimal values through width 38, UUID, UInt128, BigNum, TimeTZ, nanosecond time, and every timestamp resolution, plus nullable and recursive typed reads. `read(String)` retains scalar formatting compatibility, `read(Time)` supports DATE and all timestamps, and Array/Hash reads recursively convert supported elements.

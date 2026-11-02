@@ -1,3 +1,5 @@
+require "./exception"
+
 # :nodoc:
 # DuckDB's cache uses normalized file paths (and exact named-memory paths).
 # Keep one process-wide cache while any cached database handle is alive.
@@ -38,11 +40,11 @@ class DuckDB::InstanceCache
   end
 
   private def self.destroy_cache
-    # Taking a class variable's address can lazily reinitialize it. Let the C
-    # destructor clear a local handle, then store that cleared value back.
+    # Use a local out-pointer: on the installed compiler, the first
+    # pointerof(@@cache) reinitializes the class variable and loses its handle.
     cache = @@cache
+    @@cache = Pointer(Void).null.as(LibDuckDB::InstanceCache)
     LibDuckDB.destroy_instance_cache(pointerof(cache))
-    @@cache = cache
   end
 end
 
@@ -50,6 +52,10 @@ end
 # One native database per ConnectionBuilder. A pool retains its owner even when
 # it has no connections; standalone connections release it on last disconnect.
 class DuckDB::Database
+  # :nodoc:
+  class ClosedError < DuckDB::Exception
+  end
+
   @mutex = Mutex.new
   @db = Pointer(Void).null.as(LibDuckDB::Database)
   @connections = 0
@@ -91,7 +97,7 @@ class DuckDB::Database
 
   def connect : LibDuckDB::Connection
     @mutex.synchronize do
-      raise Exception.new("Database is closed") if @db.null?
+      raise ClosedError.new("Database is closed") if @db.null?
       state = LibDuckDB.connect(@db, out connection)
       unless state.success?
         LibDuckDB.disconnect(pointerof(connection)) unless connection.null?

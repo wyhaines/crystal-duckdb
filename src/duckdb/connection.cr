@@ -73,6 +73,9 @@ class DuckDB::Connection < DB::Connection
   end
 
   def do_close
+    # Closing a result must not publish this connection while native cleanup
+    # is still using it. The connection is discarded by super instead.
+    @auto_release = false
     @results.dup.each &.close
     error = nil
     @appenders.dup.each do |appender|
@@ -98,6 +101,7 @@ class DuckDB::Connection < DB::Connection
   # :nodoc:
   def unregister_appender(appender : Appender)
     @appenders.delete(appender)
+    release_from_statement
   end
 
   # :nodoc:
@@ -126,7 +130,7 @@ class DuckDB::Connection < DB::Connection
   end
 
   def release_from_statement
-    super if @results.empty?
+    super if @results.empty? && @appenders.empty?
   end
 
   def build_prepared_statement(query) : Statement

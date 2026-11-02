@@ -67,8 +67,18 @@ class DuckDB::Statement < DB::Statement
 
   # :nodoc:
   def release_from_result_set
+    return if @closing
     close if auto_close && @active_results.empty?
     release_connection
+  end
+
+  def close
+    return if @closing
+    had_results = !@active_results.empty?
+    super
+    # Publish the connection only after Disposable has marked this statement
+    # closed and do_close has finished destroying its native handle.
+    release_connection if had_results
   end
 
   protected def do_close

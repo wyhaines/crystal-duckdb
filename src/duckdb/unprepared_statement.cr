@@ -11,7 +11,9 @@ class DuckDB::UnpreparedStatement < DB::Statement
       statement = Statement.new(@connection, @command)
       statement.auto_close = true
       close if auto_close
-      return statement.query
+      # The outer DB::Statement wrapper owns exception-time release. Calling
+      # #query here would release twice if streaming execution fails.
+      return statement.perform_query(args)
     end
     ResultSet.new self
   rescue ex
