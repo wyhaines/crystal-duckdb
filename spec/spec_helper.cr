@@ -12,9 +12,11 @@ ensure
   File.delete?(DB_FILENAME)
 end
 
-def with_cnn(&block : DB::Connection ->)
+def with_cnn(&block : DuckDB::Connection ->)
   File.delete?(DB_FILENAME)
-  DB.connect "duckdb:#{DB_FILENAME}", &block
+  DB.connect "duckdb:#{DB_FILENAME}" do |cnn|
+    yield cnn.as(DuckDB::Connection)
+  end
 ensure
   File.delete?(DB_FILENAME)
 end

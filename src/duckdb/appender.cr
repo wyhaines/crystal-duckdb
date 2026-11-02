@@ -1,7 +1,8 @@
 class DuckDB::Appender
   getter table_name : String
+  getter? closed = false
 
-  def initialize(connection : Connection, @table_name)
+  def initialize(@connection : Connection, @table_name)
     tc = @table_name.split('.')
     case tc.size
     when 1
@@ -13,10 +14,12 @@ class DuckDB::Appender
     else
       raise Exception.new("Invalid table name '#{@table_name}'")
     end
-    state = LibDuckDB.appender_create(connection, ts, tn, out @appender)
+    state = LibDuckDB.appender_create(@connection, ts, tn, out @appender)
     unless state.success?
+      LibDuckDB.appender_destroy(pointerof(@appender))
       raise Exception.new("Failed to create appender for table '#{@table_name}'")
     end
+    @connection.register_appender(self)
   end
 
   def <<(value : Nil)
@@ -29,13 +32,27 @@ class DuckDB::Appender
     self
   end
 
-  {% for name in ["begin_row", "end_row", "flush", "close"] %}
+  {% for name in ["begin_row", "end_row", "flush"] %}
     def {{name.id}}
       unless LibDuckDB.appender_{{name.id}}(self).success?
         raise Exception.new("Failed to {{name.id}} for table '#{@table_name}'")
       end
     end
   {% end %}
+
+  # Flushes pending rows and destroys the handle, including when flushing fails.
+  def close
+    return if @closed
+    begin
+      unless LibDuckDB.appender_close(self).success?
+        raise Exception.new("Failed to close for table '#{@table_name}'")
+      end
+    ensure
+      LibDuckDB.appender_destroy(pointerof(@appender))
+      @closed = true
+      @connection.unregister_appender(self)
+    end
+  end
 
   {% for name in ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"] %}
     def <<(value : {{name.id}})
@@ -60,7 +77,7 @@ class DuckDB::Appender
   end
 
   def <<(value : String)
-    check LibDuckDB.append_varchar(self, value), value
+    check LibDuckDB.append_varchar_length(self, value, value.bytesize), value
     self
   end
 
@@ -100,12 +117,8 @@ class DuckDB::Appender
   end
 
   # :nodoc:
-  def finalize
-    LibDuckDB.appender_destroy(pointerof(@appender))
-  end
-
-  # :nodoc:
   def to_unsafe
+    raise Exception.new("Appender is closed") if @closed
     @appender
   end
 

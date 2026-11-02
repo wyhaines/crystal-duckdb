@@ -8,9 +8,11 @@ class DuckDB::ResultSet < DB::ResultSet
 
   macro duckdb_set_string
     lib_value = duckdb_value("string")
-    string = String.new(lib_value)
-    LibDuckDB.free(lib_value)
-    string
+    begin
+      lib_value.data.null? ? nil : String.new(lib_value.data, lib_value.size)
+    ensure
+      LibDuckDB.free(lib_value.data)
+    end
   end
 
   def initialize(@statement : Statement)
@@ -18,11 +20,12 @@ class DuckDB::ResultSet < DB::ResultSet
   end
 
   def initialize(@statement : UnpreparedStatement)
-    check LibDuckDB.query(@statement.connection, @statement.command, out @result)
+    check LibDuckDB.query(@statement.duckdb_connection, @statement.command, out @result)
   end
 
   protected def do_close
     LibDuckDB.destroy_result(self)
+    super
   end
 
   def move_next : Bool
@@ -33,13 +36,12 @@ class DuckDB::ResultSet < DB::ResultSet
   end
 
   def read
+    column_type = LibDuckDB.column_type(self, @column_index)
 
-    unless duckdb_value("is_null").zero?
+    if column_type.sqlnull? || !duckdb_value("is_null").zero?
       @column_index += 1
       return nil
     end
-
-    column_type = LibDuckDB.column_type(self, @column_index)
 
     value = case column_type
       when .invalid?
@@ -139,6 +141,7 @@ class DuckDB::ResultSet < DB::ResultSet
                 else
                   String.new(message_p)
                 end
+      LibDuckDB.destroy_result(self)
       raise Exception.new(message)
     end
   end

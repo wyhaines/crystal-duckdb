@@ -1,6 +1,8 @@
 class DuckDB::Connection < DB::Connection
+  @appenders = Set(Appender).new
+
   record Options, filename : String, config_params : Hash(String, String) do
-    CRYSTAL_DB_PARAM_KEYS = %[
+    CRYSTAL_DB_PARAM_KEYS = %w[
       initial_pool_size
       max_pool_size
       max_idle_pool_size
@@ -8,6 +10,7 @@ class DuckDB::Connection < DB::Connection
       retry_attempts
       retry_delay
       prepared_statements
+      prepared_statements_cache
     ]
 
     def initialize(@filename, @config_params)
@@ -15,6 +18,7 @@ class DuckDB::Connection < DB::Connection
 
     def self.from_uri(uri : URI)
       filename = URI.decode_www_form((uri.host || "") + uri.path)
+      filename = ":memory:" if filename == "[:memory:]"
       params = HTTP::Params.parse(uri.query || "")
       config_params = Hash(String, String).new
       params.each do |param|
@@ -36,7 +40,14 @@ class DuckDB::Connection < DB::Connection
           raise Exception.new("Configuration error for '#{key}' with value '#{value}'") unless state.success?
         end
         state = LibDuckDB.open_ext(duckdb_options.filename, out @db, config, out error_msg_p)
-        raise Exception.new(String.new(error_msg_p)) unless state.success?
+        unless state.success?
+          begin
+            message = error_msg_p.null? ? "Connection error" : String.new(error_msg_p)
+            raise Exception.new(message)
+          ensure
+            LibDuckDB.free(error_msg_p)
+          end
+        end
       ensure
         LibDuckDB.destroy_config(pointerof(config))
       end
@@ -51,17 +62,41 @@ class DuckDB::Connection < DB::Connection
   def appender(table_name, &block)
     appender = Appender.new(self, table_name)
     yield appender
-    appender.close
+  ensure
+    appender.try &.close
   end
 
   def do_close
+    error = nil
+    @appenders.dup.each do |appender|
+      begin
+        appender.close
+      rescue ex
+        error ||= ex
+      end
+    end
     super
     LibDuckDB.disconnect(pointerof(@conn))
     LibDuckDB.close(pointerof(@db))
+    raise error if error
+  end
+
+  # :nodoc:
+  def register_appender(appender : Appender)
+    @appenders.add(appender)
+  end
+
+  # :nodoc:
+  def unregister_appender(appender : Appender)
+    @appenders.delete(appender)
   end
 
   def build_prepared_statement(query) : Statement
     Statement.new(self, query)
+  end
+
+  def driver_name : String
+    "duckdb"
   end
 
   def build_unprepared_statement(query) : UnpreparedStatement

@@ -12,12 +12,18 @@ describe Driver do
     end
   end
 
+  it "exposes its registered driver name" do
+    with_cnn do |cnn|
+      cnn.driver_name.should eq("duckdb")
+    end
+  end
+
   describe "DuckDB configuration" do
     it "should accept duckdb configuration params" do
       ["nulls_first", "nulls_last"].each do |value|
         with_db "null_order=#{value}" do |db|
           config = db.scalar "SELECT current_setting('null_order')"
-          config.should eq value
+          config.as(String).downcase.should eq value.downcase
         end
       end
     end

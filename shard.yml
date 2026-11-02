@@ -4,7 +4,7 @@ version: 0.2.5
 dependencies:
   db:
     github: crystal-lang/crystal-db
-    version: ~> 0.13.0
+    version: ">= 0.13.1, < 0.16.0"
 
 crystalline:
     main: src/duckdb.cr

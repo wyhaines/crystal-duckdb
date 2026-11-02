@@ -1,7 +1,14 @@
 class DuckDB::Statement < DB::Statement
   def initialize(connection, command)
     super(connection, command)
-    LibDuckDB.prepare(duckdb_connection, command, out @statement)
+    state = LibDuckDB.prepare(duckdb_connection, command, out @statement)
+    unless state.success?
+      begin
+        check state
+      ensure
+        LibDuckDB.destroy_prepare(pointerof(@statement))
+      end
+    end
   end
 
   protected def perform_query(args : Enumerable) : DB::ResultSet
@@ -9,14 +16,29 @@ class DuckDB::Statement < DB::Statement
       bind_arg(index, arg)
     end
     ResultSet.new(self)
+  rescue ex
+    close if auto_close
+    raise ex
   end
 
   protected def perform_exec(args : Enumerable) : DB::ExecResult
     args.each_with_index(1) do |arg, index|
       bind_arg(index, arg)
     end
-    result = ResultSet.new(self)
-    DB::ExecResult.new result.rows_changed.to_i64, result.rows_changed.to_i64
+    state = LibDuckDB.execute_prepared(self, out result)
+    begin
+      unless state.success?
+        message_p = LibDuckDB.result_error(pointerof(result))
+        message = message_p.null? ? "Error with command `#{@command}`" : String.new(message_p)
+        raise Exception.new(message)
+      end
+      rows_changed = LibDuckDB.rows_changed(pointerof(result)).to_i64
+      DB::ExecResult.new rows_changed, rows_changed
+    ensure
+      LibDuckDB.destroy_result(pointerof(result))
+    end
+  ensure
+    close if auto_close
   end
 
   protected def do_close
@@ -50,7 +72,7 @@ class DuckDB::Statement < DB::Statement
   end
 
   private def bind_arg(index, value : String)
-    check LibDuckDB.bind_varchar(self, index, value)
+    check LibDuckDB.bind_varchar_length(self, index, value, value.bytesize)
   end
 
   private def bind_arg(index, value : Date)

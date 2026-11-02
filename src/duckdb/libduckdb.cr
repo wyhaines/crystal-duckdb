@@ -21,52 +21,66 @@ module DuckDB
       # Invalid data type.
       INVALID = 0
       # Treated as `Bool`.
-      BOOLEAN
+      BOOLEAN = 1
       # Treated as `Int8`.
-      TINYINT
+      TINYINT = 2
       # Treated as `Int16`.
-      SMALLINT
+      SMALLINT = 3
       # Treated as `Int32`.
-      INTEGER
+      INTEGER = 4
       # Treated as `Int64`.
-      BIGINT
+      BIGINT = 5
       # Treated as `UInt8`.
-      UTINYINT
+      UTINYINT = 6
       # Treated as `UInt16`.
-      USMALLINT
+      USMALLINT = 7
       # Treated as `UInt32`.
-      UINTEGER
+      UINTEGER = 8
       # Treated as `UInt64`.
-      UBIGINT
+      UBIGINT = 9
       # Treated as `Float32`.
-      FLOAT
+      FLOAT = 10
       # Treated as `Float64`.
-      DOUBLE
+      DOUBLE = 11
       # Treated as `Time`.
-      TIMESTAMP
+      TIMESTAMP = 12
       # Treated as `DuckDB::Date`.
-      DATE
+      DATE = 13
       # Treated as `DuckDB::TimeOfDay`.
-      TIME
+      TIME = 14
       # Treated as `DuckDB::Interval`.
-      INTERVAL
+      INTERVAL = 15
       # Treated as `Int128`.
-      HUGEINT
+      HUGEINT = 16
       # Treated as `String`.
-      VARCHAR
+      VARCHAR = 17
       # Treated as `Bytes`.
-      BLOB
-      ## The following types are not used but are included for completeness
-      DECIMAL
-      TIMESTAMP_S
-      TIMESTAMP_MS
-      TIMESTAMP_NS
-      ENUM
-      LIST
-      STRUCT
-      MAP
-      UUID
-      JSON
+      BLOB = 18
+      # Additional DuckDB types.
+      DECIMAL = 19
+      TIMESTAMP_S = 20
+      TIMESTAMP_MS = 21
+      TIMESTAMP_NS = 22
+      ENUM = 23
+      LIST = 24
+      STRUCT = 25
+      MAP = 26
+      UUID = 27
+      UNION = 28
+      BIT = 29
+      TIME_TZ = 30
+      TIMESTAMP_TZ = 31
+      UHUGEINT = 32
+      ARRAY = 33
+      ANY = 34
+      BIGNUM = 35
+      SQLNULL = 36
+      STRING_LITERAL = 37
+      INTEGER_LITERAL = 38
+      TIME_NS = 39
+      GEOMETRY = 40
+      VARIANT = 41
+      TIMESTAMP_TZ_NS = 42
     end
 
 
@@ -100,6 +114,11 @@ module DuckDB
       width : UInt8
       scale : UInt8
       value : HugeInt
+    end
+
+    struct String
+      data : LibC::Char*
+      size : Idx
     end
 
     struct Blob
@@ -220,7 +239,7 @@ module DuckDB
     fun value_interval = duckdb_value_interval(result : Result*, col : Idx, row : Idx) : Interval
     # Converts the specified value to a string. Supports strings with null bytes and replaces `value_varchar`.
     # The result must be freed with `free`.
-    fun value_string = duckdb_value_string(result : Result*, col : Idx, row : Idx) : LibC::Char*  
+    fun value_string = duckdb_value_string(result : Result*, col : Idx, row : Idx) : String
     # Fetches a blob from a result set column. Returns a blob with blob.data set to nullptr on failure or NULL. The
     # resulting "blob.data" must be freed with duckdb_free.
     fun value_blob = duckdb_value_blob(result : Result*, col : Idx, row : Idx) : Blob
@@ -240,7 +259,7 @@ module DuckDB
     # prepares the specified SQL query in the specified connection handle. [OUT: prepared statement descriptor]
     fun prepare = duckdb_prepare(connection : Connection, query : LibC::Char*, out_prepared_statement : PreparedStatement*) : State
     fun prepare_error = duckdb_prepare_error(prepared_statement : PreparedStatement) : LibC::Char*
-    fun nparams = duckdb_nparams(prepared_statement : PreparedStatement, nparams_out : Idx*) : State
+    fun nparams = duckdb_nparams(prepared_statement : PreparedStatement) : Idx
 
     # binds parameters to prepared statement
     fun bind_boolean = duckdb_bind_boolean(prepared_statement : PreparedStatement, param_idx : Idx, val : CBool) : State

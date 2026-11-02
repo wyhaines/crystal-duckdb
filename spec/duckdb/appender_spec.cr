@@ -4,7 +4,7 @@ macro it_appends(klass, datatype, value)
   it "appends {{klass.id}}" do
     DB.connect DuckDB::IN_MEMORY do |cnn|
       cnn.exec "CREATE TABLE test_table (test_field {{datatype.id}});"
-      cnn.appender("test_table") do |appender|
+      cnn.as(DuckDB::Connection).appender("test_table") do |appender|
         appender.row do |r|
           r << {{value}}
         end
