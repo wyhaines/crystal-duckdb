@@ -1,11 +1,38 @@
 class DuckDB::Driver < DB::Driver
   class ConnectionBuilder < ::DB::ConnectionBuilder
+    @mutex = Mutex.new
+    @database : Database?
+    @pooled = false
+    @closed = false
+
     def initialize(@options : ::DB::Connection::Options, @duckdb_options : Connection::Options)
     end
-    
+
+    # :nodoc:
+    def retain_database
+      @mutex.synchronize do
+        @pooled = true
+        @database ||= Database.new(@duckdb_options, retained: true)
+      end
+    end
 
     def build : ::DB::Connection
-      Connection.new(@options, @duckdb_options)
+      @mutex.synchronize do
+        raise Exception.new("Database pool is closed") if @closed
+        database = @database
+        if database.nil? || database.closed?
+          database = @database = Database.new(@duckdb_options, retained: @pooled)
+        end
+        Connection.new(@options, database)
+      end
+    end
+
+    # :nodoc:
+    def close
+      @mutex.synchronize do
+        @closed = true
+        @database.try &.close
+      end
     end
   end
 

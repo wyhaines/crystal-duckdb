@@ -143,6 +143,12 @@ module DuckDB
       internal_data : Void*
     end
 
+    # Database instance cache (stable and exported in DuckDB 1.5.6 and 2.0).
+    type InstanceCache = Void*
+    fun create_instance_cache = duckdb_create_instance_cache : InstanceCache
+    fun get_or_create_from_cache = duckdb_get_or_create_from_cache(instance_cache : InstanceCache, path : LibC::Char*, out_database : Database*, config : Config, out_error : LibC::Char**) : State
+    fun destroy_instance_cache = duckdb_destroy_instance_cache(instance_cache : InstanceCache*) : Void
+
     # # NOTE: ARROW FUNCTIONS NOT IMPLEMENTED
 
     # Opens a database file at the given path (nullptr for in-memory). Returns State::Success on success, or State::Error on

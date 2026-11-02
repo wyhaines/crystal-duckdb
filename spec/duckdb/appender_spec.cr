@@ -20,7 +20,7 @@ describe DuckDB::Appender do
     it "raises on non-existent table" do
       DB.connect DuckDB::IN_MEMORY do |cnn|
         expect_raises(DuckDB::Exception) do
-          cnn.appender("no_table")
+          cnn.as(DuckDB::Connection).appender("no_table")
         end
       end
     end

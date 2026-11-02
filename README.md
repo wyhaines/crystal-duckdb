@@ -95,6 +95,14 @@ DB.connect DuckDB::IN_MEMORY do |cnn|
 end
 ```
 
+### Database instances and pools
+
+All connections in a `DB.open` pool share one DuckDB database, even if the pool temporarily has no connections. Close the pool to release its database. A standalone `DB.connect` releases its database when the connection closes.
+
+File databases use DuckDB's process-wide instance cache, so separate pools and standalone connections opening the same normalized file path share committed writes. DuckDB rejects incompatible configurations for an already open database; the driver raises `DuckDB::Exception` with DuckDB's message. After the last user closes, the file is released and can be reopened with different settings.
+
+Each anonymous in-memory pool (`DuckDB::IN_MEMORY`, `duckdb://`, or `duckdb::memory:`) has its own database. For shared named memory, use `duckdb::memory:my_name` or `duckdb://%3Amemory%3Amy_name`. The name shares an instance across pools and standalone connections until its last user closes. Cache and owner operations are protected by mutexes for concurrent connection creation; use a separate connection for each concurrent query.
+
 ### Configuration
 
 You can also modify the DuckDB configuration upon opening a database using URI params (together with the URI params available from `crystal-db`).

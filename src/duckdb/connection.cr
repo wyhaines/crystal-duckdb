@@ -17,8 +17,10 @@ class DuckDB::Connection < DB::Connection
     end
 
     def self.from_uri(uri : URI)
-      filename = URI.decode_www_form((uri.host || "") + uri.path)
-      filename = ":memory:" if filename == "[:memory:]"
+      filename = URI.decode((uri.host || "") + uri.path)
+      if filename.starts_with?("[:memory:") && filename.ends_with?(']')
+        filename = filename[1...-1]
+      end
       params = HTTP::Params.parse(uri.query || "")
       config_params = Hash(String, String).new
       params.each do |param|
@@ -29,30 +31,13 @@ class DuckDB::Connection < DB::Connection
   end
 
   def initialize(options : ::DB::Connection::Options, duckdb_options : Options)
+    initialize(options, Database.new(duckdb_options))
+  end
+
+  # :nodoc:
+  def initialize(options : ::DB::Connection::Options, @database : Database)
     super(options)
-    if duckdb_options.config_params.empty?
-      check LibDuckDB.open(duckdb_options.filename, out @db)
-    else
-      LibDuckDB.create_config(out config)
-      begin
-        duckdb_options.config_params.each do |key, value|
-          state = LibDuckDB.set_config(config, key, value)
-          raise Exception.new("Configuration error for '#{key}' with value '#{value}'") unless state.success?
-        end
-        state = LibDuckDB.open_ext(duckdb_options.filename, out @db, config, out error_msg_p)
-        unless state.success?
-          begin
-            message = error_msg_p.null? ? "Connection error" : String.new(error_msg_p)
-            raise Exception.new(message)
-          ensure
-            LibDuckDB.free(error_msg_p)
-          end
-        end
-      ensure
-        LibDuckDB.destroy_config(pointerof(config))
-      end
-    end
-    check LibDuckDB.connect(@db, out @conn)
+    @conn = @database.connect
   end
 
   def appender(table_name)
@@ -75,9 +60,11 @@ class DuckDB::Connection < DB::Connection
         error ||= ex
       end
     end
-    super
-    LibDuckDB.disconnect(pointerof(@conn))
-    LibDuckDB.close(pointerof(@db))
+    begin
+      super
+    ensure
+      @database.disconnect(pointerof(@conn))
+    end
     raise error if error
   end
 
@@ -107,7 +94,4 @@ class DuckDB::Connection < DB::Connection
     @conn
   end
 
-  private def check(state)
-    raise Exception.new("Connection error") unless state == LibDuckDB::State::Success
-  end
 end

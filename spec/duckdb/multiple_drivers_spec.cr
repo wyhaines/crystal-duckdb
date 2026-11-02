@@ -16,7 +16,27 @@ class OtherDriverConnection < DB::Connection
   end
 end
 
+class OtherDriver < DB::Driver
+  class ConnectionBuilder < DB::ConnectionBuilder
+    def build : DB::Connection
+      OtherDriverConnection.new(DB::Connection::Options.new)
+    end
+  end
+
+  def connection_builder(uri : URI) : DB::ConnectionBuilder
+    ConnectionBuilder.new
+  end
+end
+
+DB.register_driver "other", OtherDriver
+
 describe "DuckDB with another crystal-db driver" do
+  it "preserves DB.open for other drivers" do
+    DB.open "other://" do |db|
+      db.using_connection { |cnn| cnn.driver_name.should eq("other") }
+    end
+  end
+
   it "can execute an unprepared query" do
     other = OtherDriverConnection.new(DB::Connection::Options.new)
     with_cnn do |cnn|
