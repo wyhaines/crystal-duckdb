@@ -25,6 +25,7 @@ require "./duckdb/unprepared_statement"
 require "./duckdb/vector"
 require "./duckdb/vector_view"
 require "./duckdb/version"
+require "./duckdb/append_column"
 
 module DuckDB
   IN_MEMORY = "duckdb://%3Amemory%3A"

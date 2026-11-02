@@ -279,6 +279,13 @@ module DuckDB
 
     # Chunks and logical types returned by these functions are owned by the caller.
     # fetch_chunk and result_return_type take the result BY VALUE.
+    fun create_data_chunk = duckdb_create_data_chunk(types : LogicalType*, column_count : Idx) : DataChunk
+    fun data_chunk_reset = duckdb_data_chunk_reset(chunk : DataChunk) : Void
+    fun data_chunk_set_size = duckdb_data_chunk_set_size(chunk : DataChunk, size : Idx) : Void
+    fun vector_size = duckdb_vector_size : Idx
+    fun vector_ensure_validity_writable = duckdb_vector_ensure_validity_writable(vector : Vector) : Void
+    fun vector_assign_string_element_len = duckdb_vector_assign_string_element_len(vector : Vector, index : Idx, str : LibC::Char*, length : Idx) : Void
+    fun append_data_chunk = duckdb_append_data_chunk(appender : Appender, chunk : DataChunk) : State
     fun fetch_chunk = duckdb_fetch_chunk(result : Result) : DataChunk
     fun destroy_data_chunk = duckdb_destroy_data_chunk(chunk : DataChunk*) : Void
     fun data_chunk_get_size = duckdb_data_chunk_get_size(chunk : DataChunk) : Idx

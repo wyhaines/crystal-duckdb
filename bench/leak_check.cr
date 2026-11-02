@@ -14,6 +14,37 @@ interval = Math.max(iterations // 10, 1)
 
 # Use a fresh database for each case, with no table growth or statement-cache growth.
 cases = {
+  "chunk appender"            => ->(db : DB::Connection) {
+    cnn = db.as(DuckDB::Connection)
+    cnn.exec("BEGIN TRANSACTION")
+    begin
+      cnn.appender("append_values") do |a|
+        4097.times { |i| a.row { |r| r << i << DuckDB::Decimal.new(123_i128, 18, 3) << "label" } }
+        a.row { |r| r << "4097" << DuckDB::Decimal.new(123_i128, 18, 3) << "cast" }
+        a.append_columns([4098, 4099], [DuckDB::Decimal.new(123_i128, 18, 3)] * 2, ["column", "column"])
+      end
+    ensure
+      # Rollback avoids table/row-group growth being mistaken for a handle leak.
+      cnn.exec("ROLLBACK")
+    end
+  },
+  "failing chunk appender"    => ->(db : DB::Connection) {
+    cnn = db.as(DuckDB::Connection)
+    begin
+      cnn.appender("append_values") do |a|
+        a.row { |r| r << 1 << DuckDB::Decimal.new(123_i128, 18, 3) << "label" }
+        a << 2 << "bad"
+      end
+    rescue DuckDB::Exception
+    end
+  },
+  "failing appender close"    => ->(db : DB::Connection) {
+    cnn = db.as(DuckDB::Connection)
+    begin
+      cnn.appender("append_values") { |a| a.row { |r| r << 1 << DuckDB::Decimal.new(123_i128, 18, 3) << nil } }
+    rescue DuckDB::Exception
+    end
+  },
   "prepared query"            => ->(cnn : DB::Connection) {
     cnn.query("SELECT ?::BIGINT", 42) { |rs| rs.each { rs.read(Int64) } }
   },
@@ -40,6 +71,7 @@ cases = {
 cases.each do |name, operation|
   # duckdb::memory: bypasses the original bracketed-host URI bug for the baseline.
   DB.connect "duckdb::memory:" do |cnn|
+    cnn.exec("CREATE TABLE append_values (n BIGINT, d DECIMAL(18,3), label VARCHAR NOT NULL)")
     100.times { operation.call(cnn) }
     GC.collect
     puts "#{name} (KiB), 0:#{rss_kib}"

@@ -276,3 +276,20 @@ int __wrap_duckdb_appender_create_ext(void *conn, const char *catalog, const cha
 INDEXED_TYPE_WRAPPER(duckdb_appender_column_type)
 typedef struct { uint8_t width, scale; spec_uhugeint value; } spec_decimal;
 VALUE_WRAPPER(duckdb_create_decimal, spec_decimal)
+
+static _Atomic int64_t created_chunks, appended_chunks, chunk_failure_after = -1;
+int64_t spec_created_chunks(void) { return created_chunks; }
+int64_t spec_appended_chunks(void) { return appended_chunks; }
+void spec_fail_create_chunk_after(int64_t count) { chunk_failure_after = count; }
+extern void *__real_duckdb_create_data_chunk(void **, uint64_t);
+void *__wrap_duckdb_create_data_chunk(void **types, uint64_t count) {
+    if (chunk_failure_after >= 0 && atomic_fetch_sub(&chunk_failure_after, 1) == 0) return NULL;
+    void *chunk = __real_duckdb_create_data_chunk(types, count);
+    if (chunk) { chunks++; created_chunks++; }
+    return chunk;
+}
+extern int __real_duckdb_append_data_chunk(void *, void *);
+int __wrap_duckdb_append_data_chunk(void *appender, void *chunk) {
+    appended_chunks++;
+    return __real_duckdb_append_data_chunk(appender, chunk);
+}

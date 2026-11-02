@@ -363,6 +363,31 @@ require "../support/lifecycle"
       native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
+    it "keeps writable chunks private across migrating row and columnar loads" do
+      before = native_lifetime { ExecutionContextSpec.handles }
+      DB.open "duckdb::memory:?threads=1&max_pool_size=4&max_idle_pool_size=4" do |db|
+        8.times { |i| db.exec "CREATE TABLE bulk_#{i} (v BIGINT, label VARCHAR)" }
+        ExecutionContextSpec.run(8) do |worker|
+          db.using_connection do |conn|
+            conn.as(DuckDB::Connection).appender("bulk_#{worker}") do |a|
+              3000.times do |row|
+                a.row do |r|
+                  row % 101 == 0 ? r << row.to_s : r << row
+                  Fiber.yield if row % 257 == 0
+                  r << "worker-#{worker}"
+                end
+              end
+              Fiber.yield
+              a.append_columns((3000...6000).to_a, Array.new(3000, "worker-#{worker}"))
+            end
+            conn.scalar("SELECT count(*) FROM bulk_#{worker} WHERE label = ?", "worker-#{worker}").should eq(6000)
+            conn.scalar("SELECT sum(v)::BIGINT FROM bulk_#{worker}").should eq(17_997_000)
+          end
+        end
+      end
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
+    end
+
     it "opens and closes owners on the same file and named memory database without losing writes" do
       before = native_lifetime { ExecutionContextSpec.handles }
       path = ".tmp/execution-context-#{Random.rand(1_u64..UInt64::MAX)}.db"
