@@ -10,22 +10,31 @@ permissions:
 
 jobs:
   test:
-    name: DuckDB ${{ matrix.duckdb }} / Crystal ${{ matrix.crystal }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / DuckDB ${{ matrix.duckdb }} / Crystal ${{ matrix.crystal }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         # Oldest Crystal that install-crystal can set up on current runners (PCRE2,
         # 1.8+) and that runs crystal-db's shared specs without skips (1.9+).
         crystal: [latest, '1.9.0']
         # Archive names and SHA-256 digests are pinned in scripts/ci-local.sh.
         duckdb: ['1.5.6', '2.0.0']
+        # macos-latest is arm64. Start macOS coverage with current Crystal;
+        # the existing Linux cells continue to test the minimum version.
+        include:
+          - {os: macos-latest, crystal: latest, duckdb: '1.5.6'}
+          - {os: macos-latest, crystal: latest, duckdb: '2.0.0'}
     steps:
       - uses: actions/checkout@v7.0.1
       - name: Install Crystal
         uses: crystal-lang/install-crystal@v1.9.5
         with:
           crystal: ${{ matrix.crystal }}
+      - name: Verify macOS runner architecture
+        if: runner.os == 'macOS'
+        run: test "$(uname -m)" = arm64
       - name: Download and verify DuckDB, install shards, and run specs
         run: scripts/ci-local.sh "${{ matrix.duckdb }}" "$RUNNER_TEMP/duckdb"
       - name: Check README programs
@@ -40,4 +49,9 @@ jobs:
           CRYSTAL_WORKERS: 4
           LIBRARY_PATH: ${{ runner.temp }}/duckdb/duckdb-${{ matrix.duckdb }}
           LD_LIBRARY_PATH: ${{ runner.temp }}/duckdb/duckdb-${{ matrix.duckdb }}
-        run: crystal spec spec/duckdb/execution_context_spec.cr
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            crystal spec spec/duckdb/execution_context_spec.cr --link-flags "-L'$LIBRARY_PATH' -Wl,-rpath,'$LIBRARY_PATH'"
+          else
+            crystal spec spec/duckdb/execution_context_spec.cr
+          fi

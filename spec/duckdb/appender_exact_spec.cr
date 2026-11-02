@@ -41,8 +41,10 @@ describe "DuckDB exact appending" do
   {% end %}
 end
 
-private def appender_handles
-  {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.appenders}
+native_lifetime do
+  private def appender_handles
+    {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.appenders}
+  end
 end
 
 describe "DuckDB appender exact types and identifiers" do
@@ -91,7 +93,7 @@ describe "DuckDB appender exact types and identifiers" do
 
   it "round trips DECIMAL storage widths and extrema without floats" do
     with_cnn do |cnn|
-      before = appender_handles
+      before = native_lifetime { appender_handles }
       [4, 9, 18, 38].each do |width|
         [0, 2, width].each do |scale|
           cnn.exec "CREATE OR REPLACE TABLE decimals (v DECIMAL(#{width},#{scale}))"
@@ -104,14 +106,14 @@ describe "DuckDB appender exact types and identifiers" do
           cnn.query_all("SELECT v FROM decimals", as: DuckDB::Decimal?).should eq(expected + [nil])
         end
       end
-      appender_handles.should eq(before)
+      native_lifetime { appender_handles.should eq(before) }
     end
   end
 
   it "rejects lossy decimal scale reduction and releases values when native casts fail" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE decimals (v DECIMAL(4,1))"
-      before = appender_handles
+      before = native_lifetime { appender_handles }
       expect_raises(DuckDB::Exception, /lose fractional digits/) do
         cnn.appender("decimals") { |a| a.row { |r| r << DuckDB::Decimal.new(123_i128, 4, 2) } }
       end
@@ -121,7 +123,7 @@ describe "DuckDB appender exact types and identifiers" do
       expect_raises(DuckDB::Exception) do
         cnn.appender("invalid") { |a| a.row { |r| r << DuckDB::Decimal.new(123_i128, 4, 2) } }
       end
-      appender_handles.should eq(before)
+      native_lifetime { appender_handles.should eq(before) }
     end
   end
 
@@ -145,7 +147,7 @@ describe "DuckDB appender exact types and identifiers" do
   it "destroys new values on closed appenders and rejects unsupported TZ nanoseconds" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE exact_values (v TIMESTAMPTZ)"
-      before = appender_handles
+      before = native_lifetime { appender_handles }
       appender = cnn.appender("exact_values")
       appender.close
       expect_raises(DuckDB::Exception, /closed/) { appender << UUID.random }
@@ -153,13 +155,13 @@ describe "DuckDB appender exact types and identifiers" do
       cnn.exec "CREATE TABLE tz_ns (v TIMESTAMP_NS)"
       value = DuckDB::Timestamp.from_nanoseconds(1_i128, timezone: true)
       expect_raises(DuckDB::Exception, /unavailable/) { cnn.appender("tz_ns") { |a| a.row { |r| r << value } } }
-      appender_handles.should eq(before)
+      native_lifetime { appender_handles.should eq(before) }
     end
   end
 
   it "round trips UUID, UInt128, infinite Date, TZ timestamp, TimeTZ, BigNum and BIT" do
     with_cnn do |cnn|
-      before = appender_handles
+      before = native_lifetime { appender_handles }
       {
         "UUID" => [UUID.new("00000000-0000-0000-0000-000000000000"), UUID.new("ffffffff-ffff-ffff-ffff-ffffffffffff")],
         "UHUGEINT" => [0_u128, UInt128::MAX],
@@ -173,7 +175,7 @@ describe "DuckDB appender exact types and identifiers" do
         cnn.appender("exact_values") { |a| values.each { |v| a.row { |r| r << v } }; a.row { |r| r << nil } }
         actual = cnn.query_all("SELECT v FROM exact_values") { |rs| rs.read }
         actual.should eq(values + [nil])
-        appender_handles.should eq(before)
+        native_lifetime { appender_handles.should eq(before) }
       end
     end
   end
@@ -199,11 +201,11 @@ describe "DuckDB appender exact types and identifiers" do
   it "rejects NUL bytes in every identifier before opening an appender" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE plain (v INTEGER)"
-      before = appender_handles
+      before = native_lifetime { appender_handles }
       expect_raises(DuckDB::Exception, /NUL/) { cnn.appender("plain\0ignored") }
       expect_raises(DuckDB::Exception, /NUL/) { cnn.appender("plain", "main\0ignored") }
       expect_raises(DuckDB::Exception, /NUL/) { cnn.appender("plain", catalog: "memory\0ignored") { |_| } }
-      appender_handles.should eq(before)
+      native_lifetime { appender_handles.should eq(before) }
       cnn.scalar("SELECT count(*) FROM plain").should eq(0)
     end
   end
@@ -216,7 +218,7 @@ describe "DuckDB native appender temporal casts" do
     it "casts an exact TIME_NS value to {{type.id}} in DuckDB itself" do
       with_cnn do |cnn|
         cnn.exec "CREATE TABLE native_times (v {{type.id}})"
-        before = appender_handles
+        before = native_lifetime { appender_handles }
         value = DuckDB::LibDuckDB.create_time_ns(DuckDB::LibDuckDB::TimeNS.new(nanos: 45_296_123_456_789_i64))
         state = DuckDB::LibDuckDB.appender_create_ext(cnn, nil, nil, "native_times", out appender)
         begin
@@ -230,7 +232,7 @@ describe "DuckDB native appender temporal casts" do
           DuckDB::LibDuckDB.appender_destroy(pointerof(appender))
           DuckDB::LibDuckDB.destroy_value(pointerof(value))
         end
-        appender_handles.should eq(before)
+        native_lifetime { appender_handles.should eq(before) }
       end
     end
   {% end %}

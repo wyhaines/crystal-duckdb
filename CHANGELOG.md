@@ -2,6 +2,13 @@
 
 All notable changes to this shard are documented here, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- macOS arm64 CI for DuckDB 1.5.6 and 2.0.0 with the latest Crystal, including the README programs and the four-worker execution-context specs. `scripts/ci-local.sh` and `scripts/check-readme.sh` run on macOS: they verify the pinned official archive and find `libduckdb.dylib` through an rpath, because SIP strips `DYLD_*` variables.
+- The spec suite's native-handle counters are optional. They need GNU ld `--wrap`, so they run on Linux only; elsewhere, or with `-Dno_native_lifetime`, the counter assertions are reported as pending and the other specs still run.
+
 ## [0.3.0] - Unreleased
 
 ### Breaking

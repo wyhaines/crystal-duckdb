@@ -1,8 +1,10 @@
 require "../spec_helper"
 require "../support/lifecycle"
 
-private def public_handles
-  {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.chunks, NativeLifetime.results, NativeLifetime.statements, NativeLifetime.appenders}
+native_lifetime do
+  private def public_handles
+    {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.chunks, NativeLifetime.results, NativeLifetime.statements, NativeLifetime.appenders}
+  end
 end
 
 macro chunk_scalar(accessor, sql, expected)
@@ -222,12 +224,12 @@ describe "DuckDB chunk iteration lifetime and execution" do
   it "overrides stream_results at the call and retains the streaming guard" do
     DB.connect "duckdb::memory:?stream_results=true" do |db|
       cnn = db.as(DuckDB::Connection)
-      before = NativeLifetime.streaming_executions
+      before = native_lifetime { NativeLifetime.streaming_executions }
       cnn.each_chunk("SELECT ?::BIGINT", 42) do |chunk|
         chunk[0].int64(0).should eq(42)
         cnn.each_chunk("SELECT 1") { |c| c[0].int32(0).should eq(1) }
       end
-      NativeLifetime.streaming_executions.should eq(before)
+      native_lifetime { NativeLifetime.streaming_executions.should eq(before) }
       cnn.stream_results.should be_true
       cnn.stream_results = false
       rows = 0_i64
@@ -237,7 +239,7 @@ describe "DuckDB chunk iteration lifetime and execution" do
         chunk.size.times { |r| chunk[0].int64(r).should eq(rows); rows += 1 }
       end
       rows.should eq(5000)
-      NativeLifetime.streaming_executions.should eq(before + 1)
+      native_lifetime { NativeLifetime.streaming_executions.should eq(before + 1) }
       cnn.stream_results.should be_false
       cnn.scalar("SELECT 7").should eq(7)
     end
@@ -245,7 +247,7 @@ describe "DuckDB chunk iteration lifetime and execution" do
 
   it "releases all handles after normal, break, exception, binding and SQL failures" do
     with_cnn do |cnn|
-      before = public_handles
+      before = native_lifetime { public_handles }
       cnn.each_chunk("SELECT i FROM range(5000) t(i)") { |_| break }
       expect_raises(Exception, /user failure/) { cnn.each_chunk("SELECT 1", stream: true) { |_| raise "user failure" } }
       expect_raises(DuckDB::Exception, /Expected 2 arguments, got 1/) { cnn.each_chunk("SELECT ? + ?", 1) { |_| } }
@@ -254,7 +256,7 @@ describe "DuckDB chunk iteration lifetime and execution" do
       expect_raises(DuckDB::Exception, /NUL/) { cnn.each_chunk("SELECT 1\0 +2") { |_| } }
       expect_raises(DuckDB::Exception) { cnn.each_chunk("SELECT FROM") { |_| } }
       cnn.each_chunk("SELECT 1 WHERE false") { |_| fail "empty result yielded" }
-      public_handles.should eq(before)
+      native_lifetime { public_handles.should eq(before) }
     end
   end
 
@@ -273,7 +275,7 @@ describe "DuckDB chunk iteration lifetime and execution" do
   end
 
   it "pins zero-copy buffers until callback exit even if the connection closes" do
-    before = public_handles
+    before = native_lifetime { public_handles }
     cnn = DB.connect("duckdb::memory:").as(DuckDB::Connection)
     expect_raises(DuckDB::Exception, /closed/) do
       cnn.each_chunk("SELECT encode(repeat('x',100)), repeat('y',100)") do |chunk|
@@ -283,17 +285,17 @@ describe "DuckDB chunk iteration lifetime and execution" do
             cnn.close
             expect_raises(DuckDB::Exception, /iteration has ended/) { blob.bytes(0) }
             expect_raises(DuckDB::Exception) { chunk.size }
-            NativeLifetime.chunks.should eq(before[2] + 1)
+            native_lifetime { NativeLifetime.chunks.should eq(before[2] + 1) }
             bytes.should eq(("x" * 100).to_slice)
             string_bytes.should eq(("y" * 100).to_slice)
           end
           bytes.should eq(("x" * 100).to_slice)
-          NativeLifetime.chunks.should eq(before[2] + 1)
+          native_lifetime { NativeLifetime.chunks.should eq(before[2] + 1) }
         end
-        NativeLifetime.chunks.should eq(before[2])
+        native_lifetime { NativeLifetime.chunks.should eq(before[2]) }
       end
     end
-    public_handles.should eq(before)
+    native_lifetime { public_handles.should eq(before) }
   ensure
     cnn.try &.close
   end
@@ -301,13 +303,13 @@ describe "DuckDB chunk iteration lifetime and execution" do
   it "surfaces errors after some streaming chunks and returns handles to baseline" do
     DB.connect "duckdb::memory:?threads=1&prepared_statements_cache=false" do |db|
       cnn = db.as(DuckDB::Connection)
-      before = public_handles
+      before = native_lifetime { public_handles }
       rows = 0_i64
       expect_raises(DuckDB::Exception, /boom/) do
         cnn.each_chunk("SELECT CASE WHEN i = 5000000 THEN error('boom') ELSE i END FROM range(10000000) t(i)", stream: true) { |chunk| rows += chunk.size }
       end
       rows.should be > 0
-      public_handles.should eq(before)
+      native_lifetime { public_handles.should eq(before) }
       cnn.scalar("SELECT 42").should eq(42)
     end
   end

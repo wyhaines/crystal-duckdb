@@ -61,13 +61,13 @@ describe "DuckDB statement correctness" do
 
   it "keeps older materialized results readable after a later execution fails" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = NativeLifetime.statements
+      before = native_lifetime { NativeLifetime.statements }
       rs = cnn.query("SELECT ?::INTEGER", 42)
       expect_raises(DuckDB::Exception, /Conversion Error/) { rs.statement.query("bad") }
       rs.move_next.should be_true
       rs.read(Int32).should eq(42)
       rs.close
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
     ensure
       rs.try &.close
     end
@@ -75,7 +75,7 @@ describe "DuckDB statement correctness" do
 
   it "closes an auto-closing statement only after its last result closes" do
     with_cnn do |cnn|
-      before = NativeLifetime.statements
+      before = native_lifetime { NativeLifetime.statements }
       statement = cnn.build_prepared_statement("SELECT ?::INTEGER")
       statement.auto_close = true
       first = statement.query(1)
@@ -88,7 +88,7 @@ describe "DuckDB statement correctness" do
       second.read(Int32).should eq(2)
       second.close
       statement.closed?.should be_true
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
     ensure
       statement.try &.close
     end
@@ -122,7 +122,7 @@ describe "DuckDB statement correctness" do
   end
 
   it "closes every open result when its statement is explicitly closed" do
-    before = {NativeLifetime.statements, NativeLifetime.results, NativeLifetime.chunks, NativeLifetime.logical_types}
+    before = native_lifetime { {NativeLifetime.statements, NativeLifetime.results, NativeLifetime.chunks, NativeLifetime.logical_types} }
     with_cnn do |cnn|
       statement = cnn.build_prepared_statement("SELECT ?::INTEGER")
       results = [statement.query(1), statement.query(2), statement.query(3)]
@@ -134,30 +134,30 @@ describe "DuckDB statement correctness" do
     ensure
       statement.try &.close
     end
-    {NativeLifetime.statements, NativeLifetime.results, NativeLifetime.chunks, NativeLifetime.logical_types}.should eq(before)
+    native_lifetime { {NativeLifetime.statements, NativeLifetime.results, NativeLifetime.chunks, NativeLifetime.logical_types}.should eq(before) }
   end
 
   it "releases uncached statements after successful query blocks" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = NativeLifetime.statements
+      before = native_lifetime { NativeLifetime.statements }
       2.times do
         cnn.scalar("SELECT 42").should eq(42)
         cnn.unprepared.scalar("SELECT 43").should eq(43)
-        NativeLifetime.statements.should eq(before)
+        native_lifetime { NativeLifetime.statements.should eq(before) }
       end
     end
   end
 
   it "rejects NUL bytes in prepared and unprepared SQL before making a native call" do
     with_cnn do |cnn|
-      before = {NativeLifetime.results, NativeLifetime.statements}
+      before = native_lifetime { {NativeLifetime.results, NativeLifetime.statements} }
       ["SELECT 12\0 +30", "\0SELECT 42"].each do |sql|
         expect_raises(DuckDB::Exception, /SQL text contains a NUL/) { cnn.scalar(sql) }
         expect_raises(DuckDB::Exception, /SQL text contains a NUL/) { cnn.exec(sql) }
         expect_raises(DuckDB::Exception, /SQL text contains a NUL/) { cnn.unprepared.scalar(sql) }
         expect_raises(DuckDB::Exception, /SQL text contains a NUL/) { cnn.unprepared.exec(sql) }
       end
-      {NativeLifetime.results, NativeLifetime.statements}.should eq(before)
+      native_lifetime { {NativeLifetime.results, NativeLifetime.statements}.should eq(before) }
     end
   end
 
@@ -175,10 +175,10 @@ describe "DuckDB statement correctness" do
 
   it "raises a useful DuckDB exception when a bind fails without a prepare error" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = NativeLifetime.statements
+      before = native_lifetime { NativeLifetime.statements }
       invalid = String.new(Bytes[0xff, 0xfe])
       expect_raises(DuckDB::Exception, /bind parameters.*UTF-8/) { cnn.scalar("SELECT ?::VARCHAR", invalid) }
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
       cnn.scalar("SELECT ?::VARCHAR", "ok").should eq("ok")
     end
   end

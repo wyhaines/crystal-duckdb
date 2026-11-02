@@ -97,15 +97,15 @@ describe "DuckDB exact scalar types" do
 
   it "caches enum dictionaries for a column across chunks, including wider storage" do
     with_cnn do |cnn|
-      dictionaries = NativeLifetime.enum_dictionary_reads
+      dictionaries = native_lifetime { NativeLifetime.enum_dictionary_reads }
       cnn.query("SELECT CASE WHEN i % 2 = 0 THEN 'blue' ELSE NULL END::ENUM('red','blue') FROM range(5000) t(i)") do |rs|
         i = 0
-        NativeLifetime.enum_dictionary_reads.should eq(dictionaries + 2)
+        native_lifetime { NativeLifetime.enum_dictionary_reads.should eq(dictionaries + 2) }
         rs.each do
           rs.read(String?).should eq(i.even? ? "blue" : nil)
           i += 1
         end
-        NativeLifetime.enum_dictionary_reads.should eq(dictionaries + 2)
+        native_lifetime { NativeLifetime.enum_dictionary_reads.should eq(dictionaries + 2) }
       end
       names = (0..256).map { |i| "'v#{i}'" }.join(',')
       cnn.scalar("SELECT 'v256'::ENUM(#{names})").should eq("v256")
@@ -256,7 +256,7 @@ end
 describe "DuckDB type resource ownership" do
   it "destroys exact binding values and nested type trees, including read errors" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.chunks, NativeLifetime.results, NativeLifetime.statements}
+      before = native_lifetime { {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.chunks, NativeLifetime.results, NativeLifetime.statements} }
       3.times do
         cnn.scalar("SELECT ?", UUID.new("80000000-0000-0000-0000-000000000001"))
         cnn.scalar("SELECT ?", DuckDB::TimeOfDay.new("12:34:56.123456789"))
@@ -269,7 +269,7 @@ describe "DuckDB type resource ownership" do
         cnn.scalar("SELECT [{'a':[1,NULL]},{'a':NULL}]")
         expect_raises(DuckDB::Exception, /VARIANT.*stable v1 C API/) { cnn.scalar("SELECT [42::VARIANT]") }
         cnn.scalar("SELECT NULL::VARIANT").should be_nil
-        {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.chunks, NativeLifetime.results, NativeLifetime.statements}.should eq(before)
+        native_lifetime { {NativeLifetime.values, NativeLifetime.logical_types, NativeLifetime.chunks, NativeLifetime.results, NativeLifetime.statements}.should eq(before) }
       end
     end
   end

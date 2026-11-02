@@ -48,11 +48,13 @@ require "../support/lifecycle"
       end
     end
 
-    def self.handles
-      {NativeLifetime.databases, NativeLifetime.connections, NativeLifetime.caches,
-       NativeLifetime.open_errors, NativeLifetime.results, NativeLifetime.statements,
-       NativeLifetime.appenders, NativeLifetime.chunks, NativeLifetime.logical_types,
-       NativeLifetime.values, NativeLifetime.extracted_statements}
+    native_lifetime do
+      def self.handles
+        {NativeLifetime.databases, NativeLifetime.connections, NativeLifetime.caches,
+         NativeLifetime.open_errors, NativeLifetime.results, NativeLifetime.statements,
+         NativeLifetime.appenders, NativeLifetime.chunks, NativeLifetime.logical_types,
+         NativeLifetime.values, NativeLifetime.extracted_statements}
+      end
     end
 
     def self.receive(channel : Channel(T)) : T forall T
@@ -164,7 +166,7 @@ require "../support/lifecycle"
     end
 
     it "runs prepared queries, execs and chunks through one contended pool" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&initial_pool_size=0&max_pool_size=4&max_idle_pool_size=4" do |db|
         db.exec "CREATE TABLE writes (v BIGINT)"
         prepared = db.prepared("SELECT ?::BIGINT * 7")
@@ -195,11 +197,11 @@ require "../support/lifecycle"
         db.scalar("SELECT sum(v)::BIGINT FROM writes").should eq(8128)
         db.pool.stats.idle_connections.should eq(4)
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "reuses per-connection statement caches and releases failed and discarded checkouts" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&initial_pool_size=0&max_pool_size=4&max_idle_pool_size=2" do |db|
         ExecutionContextSpec.run(32) do |worker|
           8.times do |iteration|
@@ -220,11 +222,11 @@ require "../support/lifecycle"
         end
         db.scalar("SELECT 99::BIGINT").should eq(99)
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "releases a failed unprepared stream exactly once" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.connect "duckdb::memory:?threads=1&stream_results=true" do |conn|
         counter = ExecutionContextSpec::ReleaseCounter.new
         conn.context = counter
@@ -235,11 +237,11 @@ require "../support/lifecycle"
         end
         counter.count.get.should eq(1)
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "discards a closing connection without returning its active result's lease" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       conn = DB.connect("duckdb::memory:?threads=1")
       counter = ExecutionContextSpec::ReleaseCounter.new
       conn.context = counter
@@ -247,13 +249,13 @@ require "../support/lifecycle"
       conn.close
       rs.closed?.should be_true
       counter.count.get.should eq(0)
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     ensure
       conn.try &.close
     end
 
     it "releases an explicitly closed statement's lease only after native cleanup" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.connect "duckdb::memory:?threads=1" do |conn|
         counter = ExecutionContextSpec::ReleaseCounter.new
         conn.context = counter
@@ -266,11 +268,11 @@ require "../support/lifecycle"
         counter.count.get.should eq(1)
         counter.released_while_open.get.should be_false
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "returns failed unprepared streams safely under pool contention" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&stream_results=true&max_pool_size=4&max_idle_pool_size=4" do |db|
         ExecutionContextSpec.run(32) do |worker|
           4.times do
@@ -291,11 +293,11 @@ require "../support/lifecycle"
           end
         end
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "streams on separate connections while fibers yield between rows" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&stream_results=true&max_pool_size=4&max_idle_pool_size=4" do |db|
         ExecutionContextSpec.run(24) do |worker|
           db.using_connection do |conn|
@@ -313,11 +315,11 @@ require "../support/lifecycle"
           end
         end
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "keeps a pool lease until its last appender closes" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&max_pool_size=1&max_idle_pool_size=1" do |db|
         rs = db.query("SELECT 42::BIGINT")
         connection = rs.statement.connection.as(DuckDB::Connection)
@@ -335,11 +337,11 @@ require "../support/lifecycle"
           rs.close
         end
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "appends to separate tables on separate connections across yields" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&max_pool_size=4&max_idle_pool_size=4" do |db|
         24.times { |i| db.exec "CREATE TABLE append_#{i} (v BIGINT, label VARCHAR)" }
         ExecutionContextSpec.run(24) do |worker|
@@ -358,11 +360,11 @@ require "../support/lifecycle"
           end
         end
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "opens and closes owners on the same file and named memory database without losing writes" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       path = ".tmp/execution-context-#{Random.rand(1_u64..UInt64::MAX)}.db"
       ["duckdb:#{path}", "duckdb::memory:execution-context-#{Random.rand(1_u64..UInt64::MAX)}"].each do |uri|
         # Keep the named database alive while independent owners come and go.
@@ -387,7 +389,7 @@ require "../support/lifecycle"
           anchor.scalar("SELECT count(DISTINCT v) FROM writes").should eq(192)
           anchor.scalar("SELECT sum(v)::BIGINT FROM writes").should eq(18336)
         end
-        ExecutionContextSpec.handles.should eq(before)
+        native_lifetime { ExecutionContextSpec.handles.should eq(before) }
       end
     ensure
       if path
@@ -397,7 +399,7 @@ require "../support/lifecycle"
     end
 
     it "contends on one connection builder and its database owner" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       uri = "duckdb::memory:execution-builder-#{Random.rand(1_u64..UInt64::MAX)}?threads=1"
       builder = DuckDB::Driver.new.connection_builder(URI.parse(uri)).as(DuckDB::Driver::ConnectionBuilder)
       4.times do
@@ -410,14 +412,14 @@ require "../support/lifecycle"
             conn.close
           end
         end
-        ExecutionContextSpec.handles.should eq(before)
+        native_lifetime { ExecutionContextSpec.handles.should eq(before) }
       end
       builder.close
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "reopens an owner whose last connection closes during a builder checkout" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       checked = Channel(Nil).new(1)
       continue = Channel(Nil).new(1)
       options = DuckDB::Connection::Options.from_uri(URI.parse("duckdb::memory:?threads=1"))
@@ -446,14 +448,14 @@ require "../support/lifecycle"
       error = ExecutionContextSpec.receive(done)
       raise error if error
       builder.close
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     ensure
       first.try &.close
       builder.try &.close
     end
 
     it "serializes setup hooks with in-flight connection initialization" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&initial_pool_size=0&max_pool_size=2" do |db|
         entered = Channel(Nil).new(1)
         continue = Channel(Nil).new(1)
@@ -499,11 +501,11 @@ require "../support/lifecycle"
         error = ExecutionContextSpec.receive(setup_done)
         raise error if error
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "reserves idle connections while a setup hook runs multiple queries" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       DB.open "duckdb::memory:?threads=1&max_pool_size=1&max_idle_pool_size=1" do |db|
         db.scalar("SELECT 1::BIGINT").should eq(1)
         db.setup_connection do |conn|
@@ -514,11 +516,11 @@ require "../support/lifecycle"
         db.pool.stats.idle_connections.should eq(1)
         db.scalar("SELECT 43::BIGINT").should eq(43)
       end
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
 
     it "keeps default-context fibers responsive during an isolated analytical query" do
-      before = ExecutionContextSpec.handles
+      before = native_lifetime { ExecutionContextSpec.handles }
       started = Channel(Nil).new(1)
       done = Channel(Exception?).new(1)
       running = Atomic(Bool).new(true)
@@ -550,7 +552,7 @@ require "../support/lifecycle"
       isolated.join
       raise error if error
       ticks.get.should be >= 3
-      ExecutionContextSpec.handles.should eq(before)
+      native_lifetime { ExecutionContextSpec.handles.should eq(before) }
     end
   end
 {% else %}

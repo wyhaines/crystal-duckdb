@@ -11,8 +11,10 @@ ensure
   end
 end
 
-private def native_owners
-  {NativeLifetime.databases, NativeLifetime.connections, NativeLifetime.caches, NativeLifetime.open_errors}
+native_lifetime do
+  private def native_owners
+    {NativeLifetime.databases, NativeLifetime.connections, NativeLifetime.caches, NativeLifetime.open_errors}
+  end
 end
 
 describe "DuckDB database instances" do
@@ -87,20 +89,20 @@ describe "DuckDB database instances" do
   end
 
   it "retains an anonymous memory database while its pool has zero connections" do
-    before = native_owners
+    before = native_lifetime { native_owners }
     DB.open "#{DuckDB::IN_MEMORY}?initial_pool_size=0&max_idle_pool_size=0" do |db|
       db.exec "CREATE TABLE retained AS SELECT 42::BIGINT v"
       db.pool.stats.open_connections.should eq(0)
-      NativeLifetime.databases.should eq(before[0] + 1)
-      NativeLifetime.connections.should eq(before[1])
+      native_lifetime { NativeLifetime.databases.should eq(before[0] + 1) }
+      native_lifetime { NativeLifetime.connections.should eq(before[1]) }
       db.scalar("SELECT v FROM retained").should eq(42_i64)
     end
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
   end
 
   it "shares named memory databases through the cache and releases their contents" do
     uri = "duckdb::memory:driver_named"
-    before = native_owners
+    before = native_lifetime { native_owners }
     DB.open uri do |a|
       DB.open "duckdb://%3Amemory%3Adriver_named" do |b|
         a.exec "CREATE TABLE named AS SELECT 42::BIGINT v"
@@ -108,27 +110,27 @@ describe "DuckDB database instances" do
       end
       a.scalar("SELECT v FROM named").should eq(42_i64)
     end
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
     DB.open(uri) { |db| db.scalar("SELECT count(*) FROM information_schema.tables WHERE table_name='named'").should eq(0_i64) }
   end
 
   it "rejects a different configuration with DuckDB's message and frees its error" do
     with_instance_file do |path, uri|
-      before = native_owners
+      before = native_lifetime { native_owners }
       DB.open "#{uri}?threads=1" do |a|
-        current = native_owners
+        current = native_lifetime { native_owners }
         expect_raises(DuckDB::Exception, /different configuration/) { DB.open("#{uri}?threads=2") }
-        native_owners.should eq(current)
+        native_lifetime { native_owners.should eq(current) }
         DB.open("#{uri}?threads=1") { |b| b.scalar("SELECT 42").should eq(42) }
       end
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
       DB.open("#{uri}?threads=2") { |db| db.scalar("SELECT current_setting('threads')").should eq(2_i64) }
     end
   end
 
   it "closes all checked out and idle handles and destroys the last cache" do
     with_instance_file do |path, uri|
-      before = native_owners
+      before = native_lifetime { native_owners }
       a = DB.open("#{uri}?initial_pool_size=3&max_idle_pool_size=3")
       b = DB.open(uri)
       a.exec "CREATE TABLE persisted AS SELECT 42::BIGINT v"
@@ -136,13 +138,13 @@ describe "DuckDB database instances" do
       a.close
       a.close
       checked_out.closed?.should be_true
-      NativeLifetime.databases.should eq(before[0] + 1)
-      NativeLifetime.connections.should eq(before[1] + 1)
+      native_lifetime { NativeLifetime.databases.should eq(before[0] + 1) }
+      native_lifetime { NativeLifetime.connections.should eq(before[1] + 1) }
       b.scalar("SELECT v FROM persisted").should eq(42_i64)
       b.close
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
       DB.open(uri) { |db| db.scalar("SELECT v FROM persisted").should eq(42_i64) }
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
       # A read-only open has different native config: it succeeds only after the
       # last writer has released the file's cached instance.
       DB.open("#{uri}?access_mode=read_only") { |db| db.scalar("SELECT v FROM persisted").should eq(42_i64) }
@@ -155,49 +157,49 @@ describe "DuckDB database instances" do
   it "releases a file even while another database keeps the shared cache alive" do
     with_instance_file do |path, uri|
       with_instance_file do |other_path, other_uri|
-        before = native_owners
+        before = native_lifetime { native_owners }
         DB.open other_uri do |other|
           DB.open(uri) { |db| db.exec "CREATE TABLE persisted AS SELECT 42::BIGINT v" }
-          NativeLifetime.caches.should eq(before[2] + 1)
+          native_lifetime { NativeLifetime.caches.should eq(before[2] + 1) }
           DB.open "#{uri}?access_mode=read_only" do |db|
             db.scalar("SELECT v FROM persisted").should eq(42_i64)
           end
         end
-        native_owners.should eq(before)
+        native_lifetime { native_owners.should eq(before) }
       end
     end
   end
 
   it "keeps one owner for connections made by the same builder" do
-    before = native_owners
+    before = native_lifetime { native_owners }
     builder = DuckDB::Driver.new.connection_builder(URI.parse(DuckDB::IN_MEMORY))
     first = builder.build
     second = builder.build
     first.exec "CREATE TABLE shared AS SELECT 42::BIGINT v"
-    NativeLifetime.databases.should eq(before[0] + 1)
+    native_lifetime { NativeLifetime.databases.should eq(before[0] + 1) }
     first.close
     second.scalar("SELECT v FROM shared").should eq(42_i64)
     second.close
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
   ensure
     first.try &.close
     second.try &.close
   end
 
   it "closes the owner of a standalone connection" do
-    before = native_owners
+    before = native_lifetime { native_owners }
     cnn = DB.connect(DuckDB::IN_MEMORY)
-    NativeLifetime.databases.should eq(before[0] + 1)
-    NativeLifetime.connections.should eq(before[1] + 1)
+    native_lifetime { NativeLifetime.databases.should eq(before[0] + 1) }
+    native_lifetime { NativeLifetime.connections.should eq(before[1] + 1) }
     cnn.close
     cnn.close
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
   ensure
     cnn.try &.close
   end
 
   it "creates connections concurrently from fibers without splitting a memory pool" do
-    before = native_owners
+    before = native_lifetime { native_owners }
     DB.open "#{DuckDB::IN_MEMORY}?initial_pool_size=0&max_idle_pool_size=0&max_pool_size=8" do |db|
       db.exec "CREATE TABLE concurrent (v BIGINT)"
       ready = Channel(Nil).new(8)
@@ -225,12 +227,12 @@ describe "DuckDB database instances" do
       8.times { done.receive.should be_nil }
       db.scalar("SELECT count(*) FROM concurrent").should eq(8_i64)
     end
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
   end
 
   it "opens the same cached file concurrently from fibers" do
     with_instance_file do |path, uri|
-      before = native_owners
+      before = native_lifetime { native_owners }
       DB.connect(uri) { |cnn| cnn.exec "CREATE TABLE concurrent (v BIGINT)" }
       ready = Channel(Nil).new(8)
       go = Channel(Nil).new(8)
@@ -255,53 +257,53 @@ describe "DuckDB database instances" do
       8.times { ready.receive }
       8.times { go.send(nil) }
       8.times { done.receive.should be_nil }
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
       DB.open(uri) { |db| db.scalar("SELECT count(*) FROM concurrent").should eq(8_i64) }
     end
   end
 
-  it "releases a failed standalone connection's database and cache" do
+  native_lifetime_it "releases a failed standalone connection's database and cache" do
     with_instance_file do |path, uri|
-      before = native_owners
-      NativeLifetime.fail_connect_after(0)
+      before = native_lifetime { native_owners }
+      native_lifetime { NativeLifetime.fail_connect_after(0) }
       expect_raises(DuckDB::Exception, "Connection error") { DB.connect(uri) }
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
     ensure
-      NativeLifetime.fail_connect_after(-1)
+      native_lifetime { NativeLifetime.fail_connect_after(-1) }
     end
   end
 
-  it "releases earlier connections when initial pool construction fails" do
+  native_lifetime_it "releases earlier connections when initial pool construction fails" do
     with_instance_file do |path, uri|
-      before = native_owners
-      NativeLifetime.fail_connect_after(2)
+      before = native_lifetime { native_owners }
+      native_lifetime { NativeLifetime.fail_connect_after(2) }
       expect_raises(DuckDB::Exception, "Connection error") { DB.open("#{uri}?initial_pool_size=3") }
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
     ensure
-      NativeLifetime.fail_connect_after(-1)
+      native_lifetime { NativeLifetime.fail_connect_after(-1) }
     end
   end
 
   it "releases every connection and its owner even when an appender fails to close" do
-    before = native_owners
+    before = native_lifetime { native_owners }
     db = DB.open("#{DuckDB::IN_MEMORY}?initial_pool_size=3&max_idle_pool_size=3")
     cnn = db.checkout.as(DuckDB::Connection)
     cnn.exec "CREATE TABLE required (v INT NOT NULL)"
     cnn.appender("required").row { |row| row << nil }
     expect_raises(DuckDB::Exception, /Failed to close/) { db.close }
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
     db.close
   ensure
     db.try &.close
   end
 
   it "frees errors from both uncached and cached database opens" do
-    before = native_owners
+    before = native_lifetime { native_owners }
     expect_raises(DuckDB::Exception, /read-only/) { DB.connect("duckdb::memory:?access_mode=read_only") }
-    native_owners.should eq(before)
+    native_lifetime { native_owners.should eq(before) }
     with_instance_file do |path, uri|
       expect_raises(DuckDB::Exception, /IO Error/) { DB.open("#{uri}?access_mode=read_only") }
-      native_owners.should eq(before)
+      native_lifetime { native_owners.should eq(before) }
     end
   end
 

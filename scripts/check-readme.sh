@@ -1,23 +1,28 @@
 #!/usr/bin/env bash
 # Compile and run every README Crystal fence as an independent program.
-# Set LIBRARY_PATH and LD_LIBRARY_PATH to the selected DuckDB library.
+# Set LIBRARY_PATH to the selected DuckDB directory; also LD_LIBRARY_PATH on Linux.
 # Optional CRYSTAL_SPEC_CPUS restricts compilation and execution via taskset.
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$root/scripts/ci-common.sh"
 export CRYSTAL_CACHE_DIR=${CRYSTAL_CACHE_DIR:-"$root/.cache/crystal"}
 export SHARDS_CACHE_PATH=${SHARDS_CACHE_PATH:-"$root/.cache/shards"}
 export TMPDIR="$root/.tmp"
 mkdir -p -- "$CRYSTAL_CACHE_DIR" "$SHARDS_CACHE_PATH" "$TMPDIR"
-exec 9>"$TMPDIR/compile.lock"
-flock 9
+scratch=
+trap 'rm -rf -- "$scratch"; release_compile_lock' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+acquire_compile_lock
+set_duckdb_link_args
 
 cd -- "$root"
 test -d lib/db || shards install
 # Resolve the checkout as an installed shard, without changing the examples.
 export CRYSTAL_PATH="$root/src:$root/lib:$(crystal env CRYSTAL_PATH)"
 scratch=$(mktemp -d "$TMPDIR/readme.XXXXXX")
-trap 'rm -rf -- "$scratch"' EXIT
 
 python3 - "$root/README.md" "$scratch" <<'PY'
 from pathlib import Path
@@ -52,11 +57,12 @@ fi
 count=0
 for source in "$scratch"/snippet-*.cr; do
   echo "Compiling ${source##*/}"
+  # The alternate expansions support empty arrays under Bash 3.2 with nounset.
   # Cache guard: keep immediately before every compile.
   test -n "$CRYSTAL_CACHE_DIR"
   test -d "$CRYSTAL_CACHE_DIR"
-  "${runner[@]}" crystal build "$source" -o "$scratch/example"
-  (cd -- "$scratch" && "${runner[@]}" ./example)
+  ${runner[@]+"${runner[@]}"} crystal build "$source" -o "$scratch/example" ${duckdb_link_args[@]+"${duckdb_link_args[@]}"}
+  (cd -- "$scratch" && ${runner[@]+"${runner[@]}"} ./example)
   count=$((count + 1))
 done
 echo "README: $count Crystal programs compiled and ran successfully"

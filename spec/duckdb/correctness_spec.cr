@@ -46,56 +46,56 @@ describe "DuckDB correctness" do
 
   it "destroys results from successful and failing unprepared execs" do
     with_cnn do |cnn|
-      before = NativeLifetime.results
+      before = native_lifetime { NativeLifetime.results }
       cnn.unprepared.exec("SELECT 42").rows_affected.should eq(0)
       begin
         cnn.unprepared.exec "SELECT CAST('bad' AS INTEGER)"
       rescue DuckDB::Exception
       end
-      NativeLifetime.results.should eq(before)
+      native_lifetime { NativeLifetime.results.should eq(before) }
     end
   end
 
   it "destroys prepared exec results and preserves rows affected" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE affected (i INTEGER)"
-      before = NativeLifetime.results
+      before = native_lifetime { NativeLifetime.results }
       cnn.exec("INSERT INTO affected VALUES (?), (?)", 1, 2).rows_affected.should eq(2)
-      NativeLifetime.results.should eq(before)
+      native_lifetime { NativeLifetime.results.should eq(before) }
     end
   end
 
   it "destroys results when prepared execution fails" do
     with_cnn do |cnn|
-      before = NativeLifetime.results
+      before = native_lifetime { NativeLifetime.results }
       expect_raises(DuckDB::Exception, /Conversion Error/) do
         cnn.exec "SELECT CAST(? AS INTEGER)", "bad"
       end
-      NativeLifetime.results.should eq(before)
+      native_lifetime { NativeLifetime.results.should eq(before) }
       expect_raises(DuckDB::Exception, /Conversion Error/) do
         cnn.query("SELECT CAST(? AS INTEGER)", "bad") { |_| }
       end
-      NativeLifetime.results.should eq(before)
+      native_lifetime { NativeLifetime.results.should eq(before) }
     end
   end
 
   it "destroys results when unprepared query execution fails" do
     with_cnn do |cnn|
-      before = NativeLifetime.results
+      before = native_lifetime { NativeLifetime.results }
       expect_raises(DuckDB::Exception, /Conversion Error/) do
         cnn.unprepared.query("SELECT CAST('bad' AS INTEGER)") { |_| }
       end
-      NativeLifetime.results.should eq(before)
+      native_lifetime { NativeLifetime.results.should eq(before) }
     end
   end
 
   it "raises DuckDB's error and destroys a failed prepare" do
     with_cnn do |cnn|
-      before = NativeLifetime.statements
+      before = native_lifetime { NativeLifetime.statements }
       expect_raises(DuckDB::Exception, /Parser Error/) do
         cnn.prepared "SELEC broken syntax"
       end
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
     end
   end
 
@@ -153,12 +153,12 @@ describe "DuckDB correctness" do
   it "destroys an appender on close and allows repeated close" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE appender_close (i INTEGER)"
-      before = NativeLifetime.appenders
+      before = native_lifetime { NativeLifetime.appenders }
       appender = cnn.appender("appender_close")
       appender.row { |row| row << 42 }
       appender.close
       appender.close
-      NativeLifetime.appenders.should eq(before)
+      native_lifetime { NativeLifetime.appenders.should eq(before) }
       cnn.scalar("SELECT i FROM appender_close").should eq(42)
     end
   end
@@ -166,14 +166,14 @@ describe "DuckDB correctness" do
   it "closes and destroys an appender when its block raises" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE appender_ensure (i INTEGER)"
-      before = NativeLifetime.appenders
+      before = native_lifetime { NativeLifetime.appenders }
       expect_raises(Exception, "block failed") do
         cnn.appender("appender_ensure") do |appender|
           appender.row { |row| row << 42 }
           raise "block failed"
         end
       end
-      NativeLifetime.appenders.should eq(before)
+      native_lifetime { NativeLifetime.appenders.should eq(before) }
       cnn.scalar("SELECT i FROM appender_ensure").should eq(42)
     end
   end
@@ -181,20 +181,20 @@ describe "DuckDB correctness" do
   it "destroys an appender even when close fails" do
     with_cnn do |cnn|
       cnn.exec "CREATE TABLE appender_constraint (i INTEGER NOT NULL)"
-      before = NativeLifetime.appenders
+      before = native_lifetime { NativeLifetime.appenders }
       appender = cnn.appender("appender_constraint")
       appender.row { |row| row << nil }
       expect_raises(DuckDB::Exception) { appender.close }
       appender.close
-      NativeLifetime.appenders.should eq(before)
+      native_lifetime { NativeLifetime.appenders.should eq(before) }
     end
   end
 
   it "destroys the handle from a failed appender creation" do
     with_cnn do |cnn|
-      before = NativeLifetime.appenders
+      before = native_lifetime { NativeLifetime.appenders }
       expect_raises(DuckDB::Exception) { cnn.appender("missing_table") }
-      NativeLifetime.appenders.should eq(before)
+      native_lifetime { NativeLifetime.appenders.should eq(before) }
     end
   end
 
@@ -206,13 +206,13 @@ describe "DuckDB correctness" do
   end
 
   it "destroys open appenders before closing their connection" do
-    before = NativeLifetime.appenders
+    before = native_lifetime { NativeLifetime.appenders }
     cnn = DB.connect("duckdb::memory:").as(DuckDB::Connection)
     cnn.exec "CREATE TABLE connection_close (i INTEGER)"
     appender = cnn.appender("connection_close")
     appender.row { |row| row << 42 }
     cnn.close
-    NativeLifetime.appenders.should eq(before)
+    native_lifetime { NativeLifetime.appenders.should eq(before) }
     appender.close
     expect_raises(DuckDB::Exception, "Appender is closed") { appender << 1 }
   ensure
@@ -228,22 +228,22 @@ describe "DuckDB correctness" do
   end
 
   it "frees the error message from a failed configured open" do
-    before = NativeLifetime.open_errors
+    before = native_lifetime { NativeLifetime.open_errors }
     expect_raises(DuckDB::Exception, /IO Error/) do
       DB.connect "duckdb:./.tmp/missing-read-only.db?access_mode=read_only"
     end
-    NativeLifetime.open_errors.should eq(before)
+    native_lifetime { NativeLifetime.open_errors.should eq(before) }
   end
 
   it "destroys uncached statements after exec and failed queries" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = NativeLifetime.statements
+      before = native_lifetime { NativeLifetime.statements }
       cnn.exec "SELECT ?::INTEGER", 42
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
       expect_raises(DuckDB::Exception) { cnn.exec "SELECT ?::INTEGER", "bad" }
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
       expect_raises(DuckDB::Exception) { cnn.query("SELECT ?::INTEGER", "bad") { |_| } }
-      NativeLifetime.statements.should eq(before)
+      native_lifetime { NativeLifetime.statements.should eq(before) }
     end
   end
 end

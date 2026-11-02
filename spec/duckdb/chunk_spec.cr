@@ -1,8 +1,10 @@
 require "../spec_helper"
 require "../support/lifecycle"
 
-private def native_reader_handles
-  {NativeLifetime.results, NativeLifetime.statements, NativeLifetime.chunks, NativeLifetime.logical_types}
+native_lifetime do
+  private def native_reader_handles
+    {NativeLifetime.results, NativeLifetime.statements, NativeLifetime.chunks, NativeLifetime.logical_types}
+  end
 end
 
 # A boundary test without scanning two billion rows.
@@ -23,9 +25,9 @@ end
 describe "DuckDB chunk reader" do
   it "reads validity bits and skips columns across many chunks with one type tree" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = native_reader_handles
-      types_before = NativeLifetime.acquired_types
-      chunks_before = NativeLifetime.fetched_chunks
+      before = native_lifetime { native_reader_handles }
+      types_before = native_lifetime { NativeLifetime.acquired_types }
+      chunks_before = native_lifetime { NativeLifetime.fetched_chunks }
       cnn.query "SELECT i, CASE WHEN i % 65 = 0 THEN NULL ELSE i END AS nullable, 'tail' FROM range(10000) t(i)" do |rs|
         rs.column_names.should eq(["i", "nullable", "'tail'"])
         rows = 0_i64
@@ -34,22 +36,22 @@ describe "DuckDB chunk reader" do
           rs.read(Int64).should eq(rows)
           rs.read(Int64?).should eq(rows % 65 == 0 ? nil : rows)
           rs.next_column_index.should eq(2)
-          NativeLifetime.chunks.should eq(before[2] + 1)
+          native_lifetime { NativeLifetime.chunks.should eq(before[2] + 1) }
           rows += 1
         end
         rows.should eq(10000)
         2.times { rs.move_next.should be_false }
-        NativeLifetime.chunks.should eq(before[2])
-        (NativeLifetime.acquired_types - types_before).should eq(3)
+        native_lifetime { NativeLifetime.chunks.should eq(before[2]) }
+        native_lifetime { (NativeLifetime.acquired_types - types_before).should eq(3) }
       end
-      (NativeLifetime.fetched_chunks - chunks_before).should be > 1
-      native_reader_handles.should eq(before)
+      native_lifetime { (NativeLifetime.fetched_chunks - chunks_before).should be > 1 }
+      native_lifetime { native_reader_handles.should eq(before) }
     end
   end
 
   it "copies strings and blobs before early close, including empty, NUL and long values" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = native_reader_handles
+      before = native_lifetime { native_reader_handles }
       rs = cnn.query("SELECT repeat('ü', 100), encode('a' || chr(0) || 'b'), '', ''::BLOB")
       rs.move_next.should be_true
       text = rs.read(String)
@@ -60,7 +62,7 @@ describe "DuckDB chunk reader" do
       rs.close
       text.should eq("ü" * 100)
       bytes.should eq(Bytes[97, 0, 98])
-      native_reader_handles.should eq(before)
+      native_lifetime { native_reader_handles.should eq(before) }
     end
   end
 
@@ -80,13 +82,13 @@ describe "DuckDB chunk reader" do
   end
 
   it "releases all handles when a result or its connection closes early" do
-    before = native_reader_handles
+    before = native_lifetime { native_reader_handles }
     cnn = DB.connect("duckdb::memory:?prepared_statements_cache=false")
     rs = cnn.query("SELECT i, repeat('x', 100) FROM range(10000) t(i)")
     rs.move_next.should be_true
     cnn.close
     rs.closed?.should be_true
-    native_reader_handles.should eq(before)
+    native_lifetime { native_reader_handles.should eq(before) }
   ensure
     rs.try &.close
     cnn.try &.close
@@ -111,14 +113,14 @@ describe "DuckDB chunk reader" do
 
   it "rejects unsupported types with the type and column name and frees the tree" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
-      before = native_reader_handles
+      before = native_lifetime { native_reader_handles }
       {
         "VARIANT" => "42::VARIANT",
       }.each do |type, sql|
         expect_raises(DuckDB::Exception, /#{type}.*named_column/) do
           cnn.query("SELECT #{sql} AS named_column") { |rs| rs.move_next; rs.read }
         end
-        native_reader_handles.should eq(before)
+        native_lifetime { native_reader_handles.should eq(before) }
       end
     end
   end
