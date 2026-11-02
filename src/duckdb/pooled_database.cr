@@ -1,4 +1,4 @@
-# :nodoc:
+# A crystal-db pool sharing one DuckDB database.
 class DuckDB::PooledDatabase < DB::Database
   @close_mutex = Mutex.new
   @connections_mutex = Mutex.new
@@ -27,6 +27,14 @@ class DuckDB::PooledDatabase < DB::Database
       connection = @builder.build
       @connections_mutex.synchronize { @connections.add(connection) }
       connection
+    end
+  end
+
+  # Checks out one connection for the entire chunk iteration, returning it on
+  # every exit path. The stream flag overrides that connection's default.
+  def each_chunk(sql : String, *args, stream : Bool = false, & : DataChunk ->) : Nil
+    using_connection do |connection|
+      connection.as(Connection).each_chunk(sql, *args, stream: stream) { |chunk| yield chunk }
     end
   end
 

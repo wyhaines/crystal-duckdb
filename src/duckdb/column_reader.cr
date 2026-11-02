@@ -11,7 +11,8 @@ abstract class DuckDB::ColumnReader
   getter scale = 0_u8
   getter storage_type = LibDuckDB::Type::INVALID
   getter array_size = 0_u64
-  getter vector = Vector.empty
+  getter vector = VectorView.empty
+  getter row_count = 0_i64
   getter dictionary = [] of String
 
   def self.build(logical_type : LibDuckDB::LogicalType, name : String) : ColumnReader
@@ -94,17 +95,17 @@ abstract class DuckDB::ColumnReader
     raise ex
   end
 
-  def bind(@vector : Vector)
+  def bind(@vector : VectorView, @row_count : Int64)
     case @type
     when .list?, .map?
-      @children[0].bind(Vector.new(LibDuckDB.list_vector_get_child(@vector.handle)))
+      @children[0].bind(VectorView.new(LibDuckDB.list_vector_get_child(@vector.handle)), LibDuckDB.list_vector_get_size(@vector.handle).to_i64)
     when .array?
-      @children[0].bind(Vector.new(LibDuckDB.array_vector_get_child(@vector.handle)))
+      @children[0].bind(VectorView.new(LibDuckDB.array_vector_get_child(@vector.handle)), @row_count * @array_size.to_i64)
     when .struct?, .union?
       @children.each_with_index do |child, index|
         # UNION is a STRUCT with a tag preceding its members.
         offset = @type.union? ? 1 : 0
-        child.bind(Vector.new(LibDuckDB.struct_vector_get_child(@vector.handle, (index + offset).to_u64)))
+        child.bind(VectorView.new(LibDuckDB.struct_vector_get_child(@vector.handle, (index + offset).to_u64)), @row_count)
       end
     end
   end
@@ -112,7 +113,7 @@ abstract class DuckDB::ColumnReader
   def close
     @children.each &.close
     LibDuckDB.destroy_logical_type(pointerof(@logical_type)) unless @logical_type.null?
-    @vector = Vector.empty
+    @vector = VectorView.empty
   end
 
   abstract def read(row : Int64) : DuckDB::Value
@@ -296,11 +297,11 @@ end
 
 # :nodoc:
 class DuckDB::UnionColumnReader < DuckDB::ColumnReader
-  @tag = Vector.empty
+  @tag = VectorView.empty
 
-  def bind(vector : Vector)
-    super
-    @tag = Vector.new(LibDuckDB.struct_vector_get_child(vector.handle, 0_u64))
+  def bind(vector : VectorView, row_count : Int64)
+    super(vector, row_count)
+    @tag = VectorView.new(LibDuckDB.struct_vector_get_child(vector.handle, 0_u64))
   end
 
   def read(row : Int64) : DuckDB::Value

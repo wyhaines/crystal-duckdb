@@ -162,7 +162,7 @@ describe "DuckDB string_t ABI" do
       state.success?.should be_true
       chunk = DuckDB::LibDuckDB.fetch_chunk(lib_result)
       begin
-        view = DuckDB::DataChunk.new(chunk)
+        view = DuckDB::ChunkView.new(chunk)
         vector = view.vector(0)
         view.size.times do |row|
           ptr = (vector.data + row * 16).as(DuckDB::LibDuckDB::StringT*)

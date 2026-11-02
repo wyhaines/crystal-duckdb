@@ -3,6 +3,7 @@ require "uuid"
 require "./duckdb/appender"
 require "./duckdb/big_num"
 require "./duckdb/column_reader"
+require "./duckdb/chunk_view"
 require "./duckdb/connection"
 require "./duckdb/data_chunk"
 require "./duckdb/database"
@@ -21,6 +22,7 @@ require "./duckdb/time_tz"
 require "./duckdb/timestamp"
 require "./duckdb/unprepared_statement"
 require "./duckdb/vector"
+require "./duckdb/vector_view"
 require "./duckdb/version"
 
 module DuckDB
@@ -35,6 +37,9 @@ module DuckDB
   TIMESTAMP_FORMAT_SECOND    = "#{DATE_FORMAT} #{TIME_OF_DAY_FORMAT_SECOND}"
 
   TIMEZONE = Time::Location::UTC
+
+  # Public SQL type identifiers, shared with the C API.
+  alias Type = LibDuckDB::Type
 
   alias Scalar = Nil | Bool | Int8 | Int16 | Int32 | Int64 | Int128 | UInt8 | UInt16 | UInt32 | UInt64 | UInt128 | Float32 | Float64 | String | Bytes | UUID | Decimal | Date | TimeOfDay | TimeTZ | Timestamp | Interval | BigNum
   alias Value = Scalar | Array(Value) | Hash(String, Value) | Hash(Value, Value)

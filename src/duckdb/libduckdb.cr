@@ -334,6 +334,7 @@ module DuckDB
     fun create_timestamp_ns = duckdb_create_timestamp_ns(value : TimestampNS) : Value
     fun create_timestamp_tz = duckdb_create_timestamp_tz(value : Timestamp) : Value
     fun create_bignum = duckdb_create_bignum(value : BigNum) : Value
+    fun append_value = duckdb_append_value(appender : Appender, value : Value) : State
     fun destroy_value = duckdb_destroy_value(value : Value*) : Void
 
     # # Memory allocation
@@ -387,6 +388,12 @@ module DuckDB
     fun destroy_prepare = duckdb_destroy_prepare(prepared_statement : PreparedStatement*) : Void
 
     # # Appender
+    fun appender_create_ext = duckdb_appender_create_ext(connection : Connection, catalog : LibC::Char*, schema : LibC::Char*, table : LibC::Char*, out_appender : Appender*) : State
+    fun appender_column_count = duckdb_appender_column_count(appender : Appender) : Idx
+    fun appender_column_type = duckdb_appender_column_type(appender : Appender, index : Idx) : LogicalType
+    fun appender_error = duckdb_appender_error(appender : Appender) : LibC::Char*
+    fun append_uhugeint = duckdb_append_uhugeint(appender : Appender, value : UHugeInt) : State
+    fun create_decimal = duckdb_create_decimal(value : Decimal) : Value
     fun appender_create = duckdb_appender_create(connection : Connection, schema : LibC::Char*, table : LibC::Char*, out_appender : Appender*) : State
 
     fun appender_begin_row = duckdb_appender_begin_row(appender : Appender) : State

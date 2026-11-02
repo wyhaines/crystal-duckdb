@@ -45,15 +45,31 @@ class DuckDB::Connection < DB::Connection
     @conn = @database.connect
   end
 
-  def appender(table_name)
-    Appender.new(self, table_name)
+  # Opens an appender using literal identifiers, without splitting table on dots.
+  def appender(table : String, schema : String? = nil, catalog : String? = nil)
+    Appender.new(self, table, schema, catalog)
   end
 
-  def appender(table_name, &block)
-    appender = Appender.new(self, table_name)
+  # Yields an appender and closes it on every exit path.
+  def appender(table : String, schema : String? = nil, catalog : String? = nil, &block)
+    appender = Appender.new(self, table, schema, catalog)
     yield appender
   ensure
     appender.try &.close
+  end
+
+  # Executes one prepared SQL statement and yields each borrowed result chunk.
+  # Bindings and guards match query. The explicit stream setting overrides
+  # stream_results for this call. Chunks and vectors expire at each block exit.
+  def each_chunk(sql : String, *args, stream : Bool = false, & : DataChunk ->) : Nil
+    statement = build_prepared_statement(sql)
+    begin
+      result = statement.query_chunks(args, stream)
+      result.each_chunk { |chunk| yield chunk }
+    ensure
+      result.try &.close
+      statement.close
+    end
   end
 
   def do_close

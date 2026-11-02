@@ -266,3 +266,13 @@ char *__wrap_duckdb_enum_dictionary_value(void *type, uint64_t index) {
     enum_dictionary_reads++;
     return __real_duckdb_enum_dictionary_value(type, index);
 }
+
+extern int __real_duckdb_appender_create_ext(void *, const char *, const char *, const char *, void **);
+int __wrap_duckdb_appender_create_ext(void *conn, const char *catalog, const char *schema, const char *table, void **appender) {
+    int state = __real_duckdb_appender_create_ext(conn, catalog, schema, table, appender);
+    if (*appender) appenders++;
+    return state;
+}
+INDEXED_TYPE_WRAPPER(duckdb_appender_column_type)
+typedef struct { uint8_t width, scale; spec_uhugeint value; } spec_decimal;
+VALUE_WRAPPER(duckdb_create_decimal, spec_decimal)

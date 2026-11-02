@@ -10,11 +10,13 @@ class DuckDB::ResultSet < DB::ResultSet
   @column_index = 0
   @exhausted = false
 
-  def initialize(statement : Statement | UnpreparedStatement)
+  @lease : ChunkLease?
+
+  def initialize(statement : Statement | UnpreparedStatement, stream : Bool? = nil)
     super(statement)
     connection = statement.connection.as(Connection)
     connection.check_query_allowed
-    streaming = connection.stream_results && statement.is_a?(Statement)
+    streaming = (stream.nil? ? connection.stream_results : stream) && statement.is_a?(Statement)
     state = if statement.is_a?(Statement)
               streaming ? statement.execute_streaming(pointerof(@result)) : LibDuckDB.execute_prepared(statement, pointerof(@result))
             else
@@ -51,6 +53,34 @@ class DuckDB::ResultSet < DB::ResultSet
     return false if @exhausted
     @row_index += 1
     while @row_index >= @chunk_size
+      return false unless fetch_next_chunk
+    end
+    @column_index = 0
+    @rows_read += 1
+    true
+  rescue ex
+    close
+    raise ex
+  end
+
+  # :nodoc:
+  def each_chunk(& : DataChunk ->) : Nil
+    check_open
+    while fetch_next_chunk
+      lease = ChunkLease.new
+      @lease = lease
+      begin
+        yield DataChunk.new(@chunk_size, @readers, @column_names, lease)
+      ensure
+        destroy_chunk
+      end
+    end
+  end
+
+  private def fetch_next_chunk : Bool
+    check_open
+    return false if @exhausted
+    loop do
       destroy_chunk
       @chunk = LibDuckDB.fetch_chunk(@result)
       if @chunk.null?
@@ -59,17 +89,12 @@ class DuckDB::ResultSet < DB::ResultSet
         @statement.connection.as(Connection).finish_stream(self)
         return false
       end
-      chunk = DataChunk.new(@chunk)
+      chunk = ChunkView.new(@chunk)
       @chunk_size = chunk.size
       @row_index = 0_i64
-      @readers.each_with_index { |reader, index| reader.bind(chunk.vector(index)) }
+      @readers.each_with_index { |reader, index| reader.bind(chunk.vector(index), @chunk_size) }
+      return true if @chunk_size > 0
     end
-    @column_index = 0
-    @rows_read += 1
-    true
-  rescue ex
-    close
-    raise ex
   end
 
   def read
@@ -145,7 +170,13 @@ class DuckDB::ResultSet < DB::ResultSet
   end
 
   private def destroy_chunk
-    LibDuckDB.destroy_data_chunk(pointerof(@chunk)) unless @chunk.null?
+    if lease = @lease
+      @lease = nil
+      lease.destroy(@chunk)
+      @chunk = Pointer(Void).null.as(LibDuckDB::DataChunk)
+    else
+      LibDuckDB.destroy_data_chunk(pointerof(@chunk)) unless @chunk.null?
+    end
   end
 
   private def destroy_native

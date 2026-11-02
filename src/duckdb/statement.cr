@@ -24,6 +24,14 @@ class DuckDB::Statement < DB::Statement
     raise ex
   end
 
+  # :nodoc:
+  def query_chunks(args : Enumerable, stream : Bool) : ResultSet
+    around_query_or_exec(args) do
+      bind_args(args)
+      ResultSet.new(self, stream)
+    end
+  end
+
   protected def perform_exec(args : Enumerable) : DB::ExecResult
     bind_args(args)
     state = LibDuckDB.execute_prepared(self, out result)
