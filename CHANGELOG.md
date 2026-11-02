@@ -7,7 +7,13 @@ All notable changes to this shard are documented here, following [Keep a Changel
 ### Added
 
 - macOS arm64 CI for DuckDB 1.5.6 and 2.0.0 with the latest Crystal, including the README programs and the four-worker execution-context specs. `scripts/ci-local.sh` and `scripts/check-readme.sh` run on macOS: they verify the pinned official archive and find `libduckdb.dylib` through an rpath, because SIP strips `DYLD_*` variables.
+- `Appender#append_columns(*columns)` loads column-oriented data: one `Indexable` per destination column, equal lengths, `nil` for NULL. Element types must be writable exactly; column count, lengths and element types are checked before anything is appended.
 - The spec suite's native-handle counters are optional. They need GNU ld `--wrap`, so they run on Linux only; elsewhere, or with `-Dno_native_lifetime`, the counter assertions are reported as pending and the other specs still run.
+
+### Changed
+
+- The Appender buffers rows in a DuckDB data chunk and submits it with `duckdb_append_data_chunk`. Values that match their column, or widen into it without loss, are written directly; everything else still uses DuckDB's conversion, with row order, errors at `<<`, and flush/discard behaviour unchanged. On a loaded laptop, 500,000-row appends went from 14–16 to 23–24 M rows/s for BIGINT and from 5–7 to 20–26 M rows/s for DECIMAL(18,3).
+- On DuckDB 2.0, the Appender writes sub-microsecond TZ Timestamps exactly into TIMESTAMP_TZ_NS columns (previously they raised).
 
 ## [0.3.0] - Unreleased
 
@@ -74,5 +80,6 @@ All notable changes to this shard are documented here, following [Keep a Changel
 
 The last upstream release covered DuckDB 0.9.x–1.3.x and crystal-db 0.13. See the [upstream release](https://github.com/amauryt/crystal-duckdb/releases/tag/v0.2.5) and [upstream history](https://github.com/amauryt/crystal-duckdb/commits/master/).
 
+[Unreleased]: https://github.com/wyhaines/crystal-duckdb/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/wyhaines/crystal-duckdb/compare/1adee51...v0.3.0
 [0.2.5]: https://github.com/amauryt/crystal-duckdb/releases/tag/v0.2.5

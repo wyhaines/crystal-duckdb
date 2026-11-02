@@ -247,6 +247,26 @@ end
 
 The Appender accepts all scalar `DuckDB::Any` values: NULL, booleans, signed/unsigned integers through 128 bits, floats, strings, bytes, UUID, Decimal, BigNum, Date, TimeOfDay, TimeTZ, Timestamp, Interval, and UTC `Time`. BIT uses a string of bits. Nested arrays/hashes are read values and cannot be bound or appended directly.
 
+Rows are buffered in a DuckDB data chunk and handed over 2,048 at a time with `duckdb_append_data_chunk`. A value whose Crystal type matches its column, or widens into it without loss (an `Int32` into BIGINT, say), is written straight into the chunk. Anything else (casts, ENUM columns, narrowing integers, TimeTZ, BigNum) still goes through DuckDB's own conversion. Row order is preserved, and a conversion error is still raised by the `<<` that supplied the value.
+
+For column-oriented data, `append_columns` takes one `Indexable` per destination column, all of the same length, and loads them a chunk at a time. `nil` elements are NULL:
+
+```crystal
+require "duckdb"
+
+DB.connect DuckDB::IN_MEMORY do |db|
+  cnn = db.as(DuckDB::Connection)
+  cnn.exec "CREATE TABLE readings (id BIGINT, label VARCHAR, value DOUBLE)"
+  ids = [1, 2, 3]
+  labels = ["a", nil, "c"]
+  values = [0.5, 1.5, 2.5]
+  cnn.appender("readings") { |appender| appender.append_columns(ids, labels, values) }
+  puts cnn.scalar("SELECT count(label) FROM readings") # => 2
+end
+```
+
+`append_columns` accepts only element types that can be written exactly (the same types as above, including lossless integer widening); use `<<` when you need DuckDB to cast. It checks the column count, the lengths and the element types before appending anything. A value that still can't be written (a Decimal with more digits than its column, for example) raises and discards the chunk it was in, up to 2,048 rows; chunks of the same call that came before it stay appended. Call it between rows, not inside `row`.
+
 Exact Decimal and temporal wrappers raise when a destination would discard fractional digits. Decimal-to-float appends also raise; explicitly convert to `Float64` if loss is intended. Stdlib UTC `Time` is represented with its nanoseconds and uses DuckDB's destination cast: a plain TIMESTAMP may truncate on 1.5.6 or round on 2.0.0, while TIMESTAMP_NS retains nanoseconds. DuckDB rejects some TIMESTAMP_NS-to-TIMESTAMP_S/MS casts; those errors propagate. Non-UTC `Time` raises `ArgumentError`.
 
 ## Type mapping
@@ -337,7 +357,7 @@ DB.connect DuckDB::IN_MEMORY do |cnn|
 end
 ```
 
-Binding temporal wrappers and UTC Time first constructs an exact native parameter; subsequent SQL casts follow DuckDB's rules. Values beyond the microsecond range may require an explicit `?::TIMESTAMP_S` or `?::TIMESTAMP_MS` parameter type. Unsupported native representations raise instead of truncating. Non-microsecond TZ Timestamp binding/appending raises on both supported engines because the required constructor is absent from the common 1.5.x C API. Microsecond-aligned TZ instants bind exactly. Appender destination precision checks are described above.
+Binding temporal wrappers and UTC Time first constructs an exact native parameter; subsequent SQL casts follow DuckDB's rules. Values beyond the microsecond range may require an explicit `?::TIMESTAMP_S` or `?::TIMESTAMP_MS` parameter type. Unsupported native representations raise instead of truncating. Non-microsecond TZ Timestamp binding raises on both supported engines because the required constructor is absent from the common 1.5.x C API. On DuckDB 2.0 the Appender writes such values exactly into TIMESTAMP_TZ_NS columns. Microsecond-aligned TZ instants bind exactly. Appender destination precision checks are described above.
 
 ### DECIMAL and optional big-number conversions
 
@@ -397,7 +417,7 @@ See [bench/README.md](bench/README.md) for release-build commands, library paths
 ## Known issues
 
 - Non-NULL VARIANT values raise, including inside nested values. NULL VARIANT reads return nil. Cast to a supported concrete SQL type.
-- Non-microsecond TZ Timestamp values cannot be bound or appended through the common C API, as described above.
+- Non-microsecond TZ Timestamp values cannot be bound through the common C API. The Appender writes them into TIMESTAMP_TZ_NS columns on DuckDB 2.0.
 - Nested parameter/Appender construction is not implemented; use SQL constructors or casts with scalar parameters.
 - crystal-db 0.13.1–0.15.0 pools can give one newly built connection to two fibers when the pool grows under parallel execution contexts. Pools created with `DB.open` on a DuckDB URI use a driver pool that avoids this; a manually constructed `DB::Database` or `DB::Pool` does not.
 - Windows is untested; upstream [issue #2](https://github.com/amauryt/crystal-duckdb/issues/2) reports abnormal termination.
