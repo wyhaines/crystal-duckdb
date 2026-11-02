@@ -245,7 +245,7 @@ DB.connect DuckDB::IN_MEMORY do |db|
 end
 ```
 
-The Appender accepts all scalar `DuckDB::Any` values: NULL, booleans, signed/unsigned integers through 128 bits, floats, strings, bytes, UUID, Decimal, BigNum, Date, TimeOfDay, TimeTZ, Timestamp, Interval, and UTC `Time`. BIT uses a string of bits. Nested arrays/hashes are read values and cannot be bound or appended directly.
+The Appender accepts all scalar `DuckDB::Any` values: NULL, booleans, signed/unsigned integers through 128 bits, floats, strings, bytes, UUID, Decimal, BigNum, Date, TimeOfDay, TimeTZ, Timestamp, Interval, and UTC `Time`, plus nested arrays, hashes and named tuples (see [Nested parameters and Appender values](#nested-parameters-and-appender-values)). BIT uses a string of bits.
 
 Rows are buffered in a DuckDB data chunk and handed over 2,048 at a time with `duckdb_append_data_chunk`. A value whose Crystal type matches its column, or widens into it without loss (an `Int32` into BIGINT, say), is written straight into the chunk. Anything else (casts, ENUM columns, narrowing integers, TimeTZ, BigNum) still goes through DuckDB's own conversion. Row order is preserved, and a conversion error is still raised by the `<<` that supplied the value.
 
@@ -303,6 +303,43 @@ These are the results of an untyped `rs.read` or `vector.value`. NULL always ret
 
 `DuckDB::Value` is the recursive result union. `DuckDB::Any` is the scalar parameter union, including UTC `Time`. JSON uses DuckDB's VARCHAR representation; it is not a separate C type enum member.
 
+### Nested parameters and Appender values
+
+Arrays, hashes and named tuples can be bound as parameters and appended, at any depth. The destination's type decides how each child is built: the column type for the Appender, and the parameter type DuckDB reports for a prepared statement.
+
+| Crystal value | Written as |
+| --- | --- |
+| `Array`, `Slice` (other than `Bytes`), `StaticArray` | LIST, or a fixed ARRAY(n) when the destination is one (exactly n elements) |
+| `NamedTuple`, or a `Hash` with `String` keys | STRUCT when the destination is a STRUCT; field names and count must match exactly |
+| `Hash` | MAP; keys can't be `nil` |
+| A value whose type matches exactly one member | UNION |
+| `nil` | NULL, at any level |
+
+```crystal
+require "duckdb"
+
+DB.connect DuckDB::IN_MEMORY do |db|
+  cnn = db.as(DuckDB::Connection)
+  cnn.exec <<-SQL
+    CREATE TABLE orders (id INTEGER, tags VARCHAR[],
+      line STRUCT(sku VARCHAR, qty INTEGER), prices MAP(VARCHAR, DECIMAL(9,2)))
+    SQL
+  cnn.exec "INSERT INTO orders VALUES (?, ?, ?, ?)",
+    1, ["new", "priority"], {sku: "A-1", qty: 2}, {"list" => DuckDB::Decimal.new(1999_i128, 9, 2)}
+  cnn.appender("orders") do |appender|
+    appender.row do |row|
+      row << 2 << [nil, "gift"] << {"sku" => "B-7", "qty" => 1} << ({} of String => DuckDB::Decimal)
+    end
+  end
+  puts cnn.scalar("SELECT id FROM orders WHERE list_contains(tags, ?)", "gift") # => 2
+  puts cnn.scalar("SELECT line.sku FROM orders WHERE id = ?", 1)               # => A-1
+end
+```
+
+Leaves follow the scalar rules, including the exactness checks for Decimal and the temporal wrappers. When DuckDB doesn't know a parameter's type (`SELECT ?`, `? = ANY(?)`), the type comes from the Crystal value: its static element type if that is concrete (`Array(Int64)`), otherwise its first non-nil element. A `Hash` then becomes a MAP; use a `NamedTuple` for a STRUCT. An empty or all-`nil` container with nothing to infer from raises. Values read from LIST, STRUCT and MAP columns can be written back to the same columns. UNION tags aren't kept on read, so a value that matches more than one member raises. On DuckDB 1.5, GEOMETRY values (WKB `Bytes`) can't be written inside nested values; 2.0 accepts them. Nested Appender values go through DuckDB's row-by-row path, not the chunk buffer.
+
+Prepared parameters use the types DuckDB reported when the statement was prepared. After a schema change those can be stale; crystal-db's statement cache reuses the same SQL across a `CREATE OR REPLACE TABLE`, for example. If a value fails to convert, the driver prepares the statement again, once, and rebinds every argument. A stale type that happens to accept the value isn't detected, and DuckDB then casts it to the new column type, possibly losing precision. Prepare a fresh statement after a schema change when exactness matters.
+
 ### Typed reads
 
 `rs.read(T)` supports each scalar above and nilable forms. `read(String)` also formats Decimal, UUID, temporal wrappers, Interval, and BigNum; ENUM and BIT already return strings. It does not stringify arbitrary containers or widen numeric types.
@@ -357,7 +394,7 @@ DB.connect DuckDB::IN_MEMORY do |cnn|
 end
 ```
 
-Binding temporal wrappers and UTC Time first constructs an exact native parameter; subsequent SQL casts follow DuckDB's rules. Values beyond the microsecond range may require an explicit `?::TIMESTAMP_S` or `?::TIMESTAMP_MS` parameter type. Unsupported native representations raise instead of truncating. Non-microsecond TZ Timestamp binding raises on both supported engines because the required constructor is absent from the common 1.5.x C API. On DuckDB 2.0 the Appender writes such values exactly into TIMESTAMP_TZ_NS columns. Microsecond-aligned TZ instants bind exactly. Appender destination precision checks are described above.
+Binding temporal wrappers and UTC Time first constructs an exact native parameter; subsequent SQL casts follow DuckDB's rules. Values beyond the microsecond range may require an explicit `?::TIMESTAMP_S` or `?::TIMESTAMP_MS` parameter type. Unsupported native representations raise instead of truncating. Binding a Decimal or temporal wrapper raises when the parameter's type would discard digits, as the Appender does; UTC `Time` is still left to DuckDB's cast. Non-microsecond TZ Timestamps bind and append exactly on DuckDB 2.0, through `duckdb_create_timestamp_tz_ns`, which the driver looks up at run time because 1.5.x doesn't export it. On 1.5.x they raise. Microsecond-aligned TZ instants bind exactly. Appender destination precision checks are described above.
 
 ### DECIMAL and optional big-number conversions
 
@@ -417,8 +454,8 @@ See [bench/README.md](bench/README.md) for release-build commands, library paths
 ## Known issues
 
 - Non-NULL VARIANT values raise, including inside nested values. NULL VARIANT reads return nil. Cast to a supported concrete SQL type.
-- Non-microsecond TZ Timestamp values cannot be bound through the common C API. The Appender writes them into TIMESTAMP_TZ_NS columns on DuckDB 2.0.
-- Nested parameter/Appender construction is not implemented; use SQL constructors or casts with scalar parameters.
+- Non-microsecond TZ Timestamp values can't be bound or appended on DuckDB 1.5.x, whose C API has no exact constructor for them.
+- A cached prepared statement can't detect a stale parameter type after a schema change; see [Nested parameters and Appender values](#nested-parameters-and-appender-values).
 - crystal-db 0.13.1–0.15.0 pools can give one newly built connection to two fibers when the pool grows under parallel execution contexts. Pools created with `DB.open` on a DuckDB URI use a driver pool that avoids this; a manually constructed `DB::Database` or `DB::Pool` does not.
 - Windows is untested; upstream [issue #2](https://github.com/amauryt/crystal-duckdb/issues/2) reports abnormal termination.
 - macOS is not in CI. The spec suite's native-handle counters use GNU ld `--wrap`, so specs run on Linux.

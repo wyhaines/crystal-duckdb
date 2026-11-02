@@ -8,12 +8,17 @@ All notable changes to this shard are documented here, following [Keep a Changel
 
 - macOS arm64 CI for DuckDB 1.5.6 and 2.0.0 with the latest Crystal, including the README programs and the four-worker execution-context specs. `scripts/ci-local.sh` and `scripts/check-readme.sh` run on macOS: they verify the pinned official archive and find `libduckdb.dylib` through an rpath, because SIP strips `DYLD_*` variables.
 - `Appender#append_columns(*columns)` loads column-oriented data: one `Indexable` per destination column, equal lengths, `nil` for NULL. Element types must be writable exactly; column count, lengths and element types are checked before anything is appended.
+- Nested parameters and Appender values: `Array`, `Slice` and `StaticArray` as LIST or fixed ARRAY, `NamedTuple` and String-keyed `Hash` as STRUCT, `Hash` as MAP, and UNION when exactly one member's type matches, with NULLs at any level. Children are built to the destination's types; without one (`SELECT ?`), types are inferred from the Crystal value. Values read from these columns can be written back.
+- On DuckDB 2.0, sub-microsecond TZ Timestamps bind exactly, through `duckdb_create_timestamp_tz_ns` looked up at run time (1.5.x doesn't export it, so the driver doesn't link it).
 - The spec suite's native-handle counters are optional. They need GNU ld `--wrap`, so they run on Linux only; elsewhere, or with `-Dno_native_lifetime`, the counter assertions are reported as pending and the other specs still run.
 
 ### Changed
 
 - The Appender buffers rows in a DuckDB data chunk and submits it with `duckdb_append_data_chunk`. Values that match their column, or widen into it without loss, are written directly; everything else still uses DuckDB's conversion, with row order, errors at `<<`, and flush/discard behaviour unchanged. On a loaded laptop, 500,000-row appends went from 14–16 to 23–24 M rows/s for BIGINT and from 5–7 to 20–26 M rows/s for DECIMAL(18,3).
 - On DuckDB 2.0, the Appender writes sub-microsecond TZ Timestamps exactly into TIMESTAMP_TZ_NS columns (previously they raised).
+- **Breaking:** binding a `Decimal`, `Timestamp` or `TimeOfDay` raises when the parameter's type would discard digits, matching the Appender. Previously DuckDB's cast rounded or truncated. UTC `Time` still uses DuckDB's cast.
+- When a parameter fails to convert, a prepared statement is prepared again once and every argument is rebound, so a cached statement survives a schema change that made its old parameter types reject the value.
+- The driver overrides crystal-db's `DB::MetadataValueConverter.arg_to_log(arg : Enumerable)` (identical in 0.13.1–0.15.0) so that recursive `DuckDB::Value` arrays compile when query arguments are logged. Its output format is unchanged.
 
 ## [0.3.0] - Unreleased
 
