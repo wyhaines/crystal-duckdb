@@ -117,7 +117,7 @@ describe "DuckDB correctness" do
     end
   end
 
-  pending "reads embedded NUL bytes from VARCHAR (DuckDB's deprecated result API truncates them)" do
+  it "reads embedded NUL bytes from VARCHAR" do
     with_cnn do |cnn|
       cnn.scalar("SELECT 'a' || chr(0) || 'b'").should eq("a\0b")
     end
@@ -125,9 +125,6 @@ describe "DuckDB correctness" do
 
   it "reads typed columns next to SQLNULL" do
     with_cnn do |cnn|
-      if cnn.scalar("SELECT version()").as(String).starts_with?("v2.")
-        pending! "DuckDB 2.0's deprecated result materialization fails for mixed SQLNULL columns"
-      end
       cnn.query "SELECT NULL, 42" do |rs|
         rs.move_next.should be_true
         rs.read.should be_nil

@@ -65,3 +65,18 @@ describe DuckDB::Date do
     end
   end
 end
+
+describe "DuckDB raw date reading" do
+  it "preserves infinite and out-of-range days and rejects Time conversion" do
+    with_cnn do |cnn|
+      ["infinity", "-infinity", "10000-01-01", "0001-01-01 (BC)"].each do |text|
+        date = cnn.scalar("SELECT DATE '#{text}'").as(DuckDB::Date)
+        # Raw values can be rebound without a conversion through Crystal Time.
+        cnn.scalar("SELECT ?::DATE = DATE '#{text}'", date).should be_true
+        expect_raises(DuckDB::Exception) { date.to_time }
+      end
+      cnn.scalar("SELECT DATE 'infinity'").as(DuckDB::Date).days.should eq(Int32::MAX)
+      cnn.scalar("SELECT DATE '-infinity'").as(DuckDB::Date).days.should eq(-Int32::MAX)
+    end
+  end
+end

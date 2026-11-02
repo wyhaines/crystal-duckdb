@@ -1,6 +1,8 @@
 class DuckDB::Statement < DB::Statement
   def initialize(connection, command)
     super(connection, command)
+    raise Exception.new("SQL text contains a NUL byte") if command.includes?('\0')
+    @connection.as(Connection).check_query_allowed
     state = LibDuckDB.prepare(duckdb_connection, command, out @statement)
     unless state.success?
       begin
@@ -11,20 +13,19 @@ class DuckDB::Statement < DB::Statement
     end
   end
 
+  @active_result : ResultSet?
+  @closing = false
+
   protected def perform_query(args : Enumerable) : DB::ResultSet
-    args.each_with_index(1) do |arg, index|
-      bind_arg(index, arg)
-    end
+    bind_args(args)
     ResultSet.new(self)
   rescue ex
-    close if auto_close
+    close if auto_close && @active_result.nil?
     raise ex
   end
 
   protected def perform_exec(args : Enumerable) : DB::ExecResult
-    args.each_with_index(1) do |arg, index|
-      bind_arg(index, arg)
-    end
+    bind_args(args)
     state = LibDuckDB.execute_prepared(self, out result)
     begin
       unless state.success?
@@ -32,17 +33,51 @@ class DuckDB::Statement < DB::Statement
         message = message_p.null? ? "Error with command `#{@command}`" : String.new(message_p)
         raise Exception.new(message)
       end
-      rows_changed = LibDuckDB.rows_changed(pointerof(result)).to_i64
-      DB::ExecResult.new rows_changed, rows_changed
+      DB::ExecResult.new LibDuckDB.rows_changed(pointerof(result)).to_i64, 0_i64
     ensure
       LibDuckDB.destroy_result(pointerof(result))
     end
   ensure
-    close if auto_close
+    close if auto_close && @active_result.nil?
+  end
+
+  # The only streaming execution entry point. Replace this method when a stable
+  # successor to DuckDB's deprecated streaming C API is available.
+  protected def execute_streaming(result : LibDuckDB::Result*) : LibDuckDB::State
+    LibDuckDB.execute_prepared_streaming(self, result)
+  end
+
+  # :nodoc:
+  def result_opened(result : ResultSet)
+    @active_result = result
+  end
+
+  # :nodoc:
+  def result_closed(result : ResultSet)
+    @active_result = nil if @active_result.same?(result)
   end
 
   protected def do_close
-    LibDuckDB.destroy_prepare(pointerof(@statement))
+    return if @closing
+    @closing = true
+    begin
+      @active_result.try &.close
+    ensure
+      LibDuckDB.destroy_prepare(pointerof(@statement))
+      @closing = false
+    end
+  end
+
+  private def bind_args(args : Enumerable)
+    raise Exception.new("Statement is closed") if closed?
+    raise Exception.new("Close the previous result before re-executing this statement") if @active_result
+    @connection.as(Connection).check_query_allowed
+    expected = LibDuckDB.nparams(self)
+    unless args.size == expected
+      raise Exception.new("Expected #{expected} arguments, got #{args.size} for `#{@command}`")
+    end
+    check LibDuckDB.clear_bindings(self)
+    args.each_with_index(1) { |arg, index| bind_arg(index, arg) }
   end
 
   private def bind_arg(index, value : Nil)
@@ -105,7 +140,9 @@ class DuckDB::Statement < DB::Statement
 
   private def check(state)
     unless state.success?
-      raise Exception.new(String.new(LibDuckDB.prepare_error(self)))
+      message_p = LibDuckDB.prepare_error(self)
+      message = message_p.null? ? "Failed to bind parameters for `#{@command}` (check parameter types and UTF-8 strings)" : String.new(message_p)
+      raise Exception.new(message)
     end
   end
 

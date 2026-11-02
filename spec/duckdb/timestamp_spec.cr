@@ -61,3 +61,28 @@ describe DuckDB::Timestamp do
     end
   end
 end
+
+describe "DuckDB raw timestamp reading" do
+  it "keeps exact microseconds outside the nanosecond span range" do
+    with_cnn do |cnn|
+      ["1600-01-01 12:34:56.123456", "2300-01-01 12:34:56.123456", "9999-12-31 23:59:59.999999", "1969-12-31 23:59:59.999999"].each do |text|
+        value = cnn.scalar("SELECT TIMESTAMP '#{text}'").as(DuckDB::Timestamp)
+        value.to_time.should eq(Time.parse(text, DuckDB::TIMESTAMP_FORMAT_SUBSECOND, Time::Location::UTC))
+        cnn.scalar("SELECT ?::TIMESTAMP = TIMESTAMP '#{text}'", value).should be_true
+      end
+    end
+  end
+
+  it "preserves infinities and extended years while rejecting Time conversion" do
+    with_cnn do |cnn|
+      ["infinity", "-infinity", "10000-01-01", "0001-01-01 (BC)"].each do |text|
+        value = cnn.scalar("SELECT TIMESTAMP '#{text}'").as(DuckDB::Timestamp)
+        cnn.scalar("SELECT ?::TIMESTAMP = TIMESTAMP '#{text}'", value).should be_true
+        expect_raises(DuckDB::Exception) { value.to_time }
+        expect_raises(DuckDB::Exception) do
+          cnn.query("SELECT TIMESTAMP '#{text}'") { |rs| rs.move_next; rs.read(Time) }
+        end
+      end
+    end
+  end
+end

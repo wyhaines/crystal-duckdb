@@ -1,55 +1,68 @@
 struct DuckDB::Date
-  getter year : Int32
-  getter month : Int32
-  getter day : Int32
+  # Preserve DuckDB's full date range, including infinities and BC dates.
+  getter days : Int32
 
-  def initialize(@year, @month, @day)
+  def initialize(year : Int32, month : Int32, day : Int32)
     unless 1 <= year <= 9999 &&
            1 <= month <= 12 &&
            1 <= day <= Time.days_in_month(year, month)
       raise ArgumentError.new "Invalid date"
     end
+    @days = (Time.utc(year, month, day) - Time::UNIX_EPOCH).days.to_i32
   end
 
   def initialize(time : Time)
-    @year = time.year
-    @month = time.month
-    @day = time.day
+    initialize(time.year, time.month, time.day)
   end
 
   def initialize(string : String)
-    time = Time.parse(string, DATE_FORMAT, TIMEZONE)
-    @year = time.year
-    @month = time.month
-    @day = time.day
+    initialize(Time.parse(string, DATE_FORMAT, TIMEZONE))
   end
 
-  # Days since `Time::UNIX_EPOCH`
-  def initialize(days : Int32)
-    time = Time::UNIX_EPOCH + Time::Span.new(days: days)
-    @year = time.year
-    @month = time.month
-    @day = time.day
+  def initialize(@days : Int32)
+  end
+
+  def year : Int32
+    parts.year
+  end
+
+  def month : Int32
+    parts.month.to_i32
+  end
+
+  def day : Int32
+    parts.day.to_i32
   end
 
   def ==(other : self) : Bool
-    @year == other.year && @month == other.month && @day == other.day
+    @days == other.days
   end
 
-  # Returns the date with an ISO 8601 format.
   def to_s
-    "#{@year}-#{sprintf("%02d-%02d", @month, @day)}"
+    return "infinity" if @days == Int32::MAX
+    return "-infinity" if @days == -Int32::MAX
+    date = parts
+    "#{date.year}-#{sprintf("%02d-%02d", date.month, date.day)}"
   end
 
-  # Returns a `Time` instance with the respective date in UTC.
+  # Returns a Time only when the conversion is representable without clamping.
   def to_time
-    Time.utc(@year, @month, @day)
+    date = parts
+    unless 1 <= date.year <= 9999
+      raise Exception.new("Date is outside Crystal Time's year range: #{date.year}")
+    end
+    Time.utc(date.year, date.month, date.day)
   end
 
   # :nodoc:
   def to_unsafe
-    date = LibDuckDB::Date.new
-    date.days = (self.to_time - Time::UNIX_EPOCH).days
-    date
+    LibDuckDB::Date.new(days: @days)
+  end
+
+  private def parts : LibDuckDB::DateParts
+    if @days == Int32::MAX || @days == -Int32::MAX
+      raise Exception.new("Cannot convert an infinite DuckDB date to calendar fields or Time")
+    end
+    LibDuckDB.from_date(to_unsafe)
   end
 end

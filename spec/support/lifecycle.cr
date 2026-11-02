@@ -1,6 +1,11 @@
 # Native handle counts keep cleanup assertions independent of the reader implementation.
-@[Link(ldflags: "#{__DIR__}/lifecycle.c -Wl,--wrap=duckdb_query,--wrap=duckdb_execute_prepared,--wrap=duckdb_destroy_result,--wrap=duckdb_prepare,--wrap=duckdb_destroy_prepare,--wrap=duckdb_appender_create,--wrap=duckdb_appender_destroy,--wrap=duckdb_open,--wrap=duckdb_open_ext,--wrap=duckdb_get_or_create_from_cache,--wrap=duckdb_close,--wrap=duckdb_connect,--wrap=duckdb_disconnect,--wrap=duckdb_create_instance_cache,--wrap=duckdb_destroy_instance_cache,--wrap=duckdb_free")]
+@[Link(ldflags: "#{__DIR__}/lifecycle.c -Wl,--wrap=duckdb_query,--wrap=duckdb_execute_prepared,--wrap=duckdb_destroy_result,--wrap=duckdb_prepare,--wrap=duckdb_destroy_prepare,--wrap=duckdb_appender_create,--wrap=duckdb_appender_destroy,--wrap=duckdb_open,--wrap=duckdb_open_ext,--wrap=duckdb_get_or_create_from_cache,--wrap=duckdb_close,--wrap=duckdb_connect,--wrap=duckdb_disconnect,--wrap=duckdb_create_instance_cache,--wrap=duckdb_destroy_instance_cache,--wrap=duckdb_free,--wrap=duckdb_execute_prepared_streaming,--wrap=duckdb_fetch_chunk,--wrap=duckdb_destroy_data_chunk,--wrap=duckdb_column_logical_type,--wrap=duckdb_destroy_logical_type,--wrap=duckdb_struct_type_child_type,--wrap=duckdb_union_type_member_type,--wrap=duckdb_vector_get_column_type,--wrap=duckdb_list_type_child_type,--wrap=duckdb_array_type_child_type,--wrap=duckdb_map_type_key_type,--wrap=duckdb_map_type_value_type")]
 lib NativeLifetime
+  fun chunks = spec_live_chunks : Int64
+  fun logical_types = spec_live_logical_types : Int64
+  fun streaming_executions = spec_streaming_executions : Int64
+  fun fetched_chunks = spec_fetched_chunks : Int64
+  fun acquired_types = spec_acquired_types : Int64
   fun results = spec_live_results : Int64
   fun statements = spec_live_statements : Int64
   fun appenders = spec_live_appenders : Int64

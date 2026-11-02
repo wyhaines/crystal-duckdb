@@ -10,6 +10,9 @@ module DuckDB
     type Appender = Void*
     type Arrow = Void*
     type Config = Void*
+    type DataChunk = Void*
+    type Vector = Void*
+    type LogicalType = Void*
 
     enum State
       Success = 0
@@ -83,6 +86,38 @@ module DuckDB
       TIMESTAMP_TZ_NS = 42
     end
 
+
+    enum ResultType
+      INVALID = 0
+      CHANGED_ROWS = 1
+      NOTHING = 2
+      QUERY_RESULT = 3
+    end
+
+    # The union's pointer variant determines its size and alignment (16 / 8).
+    struct StringT
+      length : UInt32
+      prefix : StaticArray(UInt8, 4)
+      ptr : UInt8*
+    end
+
+    struct ListEntry
+      offset : Idx
+      length : Idx
+    end
+
+    struct DateParts
+      year : Int32
+      month : Int8
+      day : Int8
+    end
+
+    struct TimeParts
+      hour : Int8
+      min : Int8
+      sec : Int8
+      micros : Int32
+    end
 
     struct Date
       # Days are stored as days since 1970-01-01
@@ -194,9 +229,6 @@ module DuckDB
     # Returns the number of columns present in the result object.
     fun column_count = duckdb_column_count(result : Result*) : Idx
 
-    # Returns the number of rows present in the result object.
-    fun row_count = duckdb_row_count(result : Result*) : Idx
-
     # Returns the number of rows changed by the query stored in the result.
     # This is relevant only for INSERT/UPDATE/DELETE queries.
     # For other queries the rows_changed will be 0.
@@ -207,57 +239,56 @@ module DuckDB
     fun result_error = duckdb_result_error(result : Result*) : LibC::Char*
 
 
-    # # SAFE fetch functions
-    # These functions will perform conversions if necessary. On failure (e.g. if conversion cannot be performed) a special
-    # value is returned.
-
-    # Converts the specified value to a bool. Returns false on failure or NULL.
-    fun value_boolean = duckdb_value_boolean(result : Result*, col : Idx, row : Idx) : CBool
-    # Converts the specified value to an int8_t. Returns 0 on failure or NULL.
-    fun value_int8 = duckdb_value_int8(result : Result*, col : Idx, row : Idx) : Int8
-    # Converts the specified value to an int16_t. Returns 0 on failure or NULL.
-    fun value_int16 = duckdb_value_int16(result : Result*, col : Idx, row : Idx) : Int16
-    # Converts the specified value to an int64_t. Returns 0 on failure or NULL.
-    fun value_int32 = duckdb_value_int32(result : Result*, col : Idx, row : Idx) : Int32
-    # Converts the specified value to an int64_t. Returns 0 on failure or NULL.
-    fun value_int64 = duckdb_value_int64(result : Result*, col : Idx, row : Idx) : Int64
-    # Converts the specified value to an huge_int_t. Returns 0 on failure or NULL.
-    fun value_hugeint = duckdb_value_hugeint(result : Result*, col : Idx, row : Idx) : HugeInt
-    # Converts the specified value to an uint8_t. Returns 0 on failure or NULL.
-    fun value_uint8 = duckdb_value_uint8(result : Result*, col : Idx, row : Idx) : UInt8
-    # Converts the specified value to an uint16_t. Returns 0 on failure or NULL.
-    fun value_uint16 = duckdb_value_uint16(result : Result*, col : Idx, row : Idx) : UInt16
-    # Converts the specified value to an uint64_t. Returns 0 on failure or NULL.
-    fun value_uint32 = duckdb_value_uint32(result : Result*, col : Idx, row : Idx) : UInt32
-    # Converts the specified value to an uint64_t. Returns 0 on failure or NULL.
-    fun value_uint64 = duckdb_value_uint64(result : Result*, col : Idx, row : Idx) : UInt64
-    # Converts the specified value to a float. Returns 0.0 on failure or NULL.
-    fun value_float = duckdb_value_float(result : Result*, col : Idx, row : Idx) : Float32
-    # Converts the specified value to a double. Returns 0.0 on failure or NULL.
-    fun value_double = duckdb_value_double(result : Result*, col : Idx, row : Idx) : Float64
-    # Converts the specified value to a date. Returns 0 on failure.
-    fun value_date = duckdb_value_date(result : Result*, col : Idx, row : Idx) : Date
-    # Converts the specified value to a time. Returns 0 on failure.
-    fun value_time = duckdb_value_time(result : Result*, col : Idx, row : Idx) : Time
-    # Converts the specified value to a timestamp. Returns 0 on failure.
-    fun value_timestamp = duckdb_value_timestamp(result : Result*, col : Idx, row : Idx) : Timestamp
-    # Converts the specified value to a interval. Returns 0 on failure.
-    fun value_interval = duckdb_value_interval(result : Result*, col : Idx, row : Idx) : Interval
-    # Converts the specified value to a string. Supports strings with null bytes and replaces `value_varchar`.
-    # The result must be freed with `free`.
-    fun value_string = duckdb_value_string(result : Result*, col : Idx, row : Idx) : String
-    # Fetches a blob from a result set column. Returns a blob with blob.data set to nullptr on failure or NULL. The
-    # resulting "blob.data" must be freed with duckdb_free.
-    fun value_blob = duckdb_value_blob(result : Result*, col : Idx, row : Idx) : Blob
-    # Returns true if the value at the specified index is NULL, and false otherwise.
-    fun value_is_null = duckdb_value_is_null(result : Result*, col : Idx, row : Idx) : CBool
+    # Chunks and logical types returned by these functions are owned by the caller.
+    # fetch_chunk and result_return_type take the result BY VALUE.
+    fun fetch_chunk = duckdb_fetch_chunk(result : Result) : DataChunk
+    fun destroy_data_chunk = duckdb_destroy_data_chunk(chunk : DataChunk*) : Void
+    fun data_chunk_get_size = duckdb_data_chunk_get_size(chunk : DataChunk) : Idx
+    fun data_chunk_get_column_count = duckdb_data_chunk_get_column_count(chunk : DataChunk) : Idx
+    fun data_chunk_get_vector = duckdb_data_chunk_get_vector(chunk : DataChunk, col : Idx) : Vector
+    fun vector_get_data = duckdb_vector_get_data(vector : Vector) : Void*
+    fun vector_get_validity = duckdb_vector_get_validity(vector : Vector) : UInt64*
+    fun vector_get_column_type = duckdb_vector_get_column_type(vector : Vector) : LogicalType
+    fun column_logical_type = duckdb_column_logical_type(result : Result*, col : Idx) : LogicalType
+    fun get_type_id = duckdb_get_type_id(type : LogicalType) : Type
+    fun destroy_logical_type = duckdb_destroy_logical_type(type : LogicalType*) : Void
+    fun decimal_width = duckdb_decimal_width(type : LogicalType) : UInt8
+    fun decimal_scale = duckdb_decimal_scale(type : LogicalType) : UInt8
+    fun decimal_internal_type = duckdb_decimal_internal_type(type : LogicalType) : Type
+    fun enum_internal_type = duckdb_enum_internal_type(type : LogicalType) : Type
+    fun enum_dictionary_size = duckdb_enum_dictionary_size(type : LogicalType) : UInt32
+    fun enum_dictionary_value = duckdb_enum_dictionary_value(type : LogicalType, index : Idx) : LibC::Char*
+    fun list_type_child_type = duckdb_list_type_child_type(type : LogicalType) : LogicalType
+    fun list_vector_get_child = duckdb_list_vector_get_child(vector : Vector) : Vector
+    fun list_vector_get_size = duckdb_list_vector_get_size(vector : Vector) : Idx
+    fun struct_type_child_count = duckdb_struct_type_child_count(type : LogicalType) : Idx
+    fun struct_type_child_type = duckdb_struct_type_child_type(type : LogicalType, index : Idx) : LogicalType
+    fun struct_type_child_name = duckdb_struct_type_child_name(type : LogicalType, index : Idx) : LibC::Char*
+    fun struct_vector_get_child = duckdb_struct_vector_get_child(vector : Vector, index : Idx) : Vector
+    fun array_type_child_type = duckdb_array_type_child_type(type : LogicalType) : LogicalType
+    fun array_type_array_size = duckdb_array_type_array_size(type : LogicalType) : Idx
+    fun array_vector_get_child = duckdb_array_vector_get_child(vector : Vector) : Vector
+    fun map_type_key_type = duckdb_map_type_key_type(type : LogicalType) : LogicalType
+    fun map_type_value_type = duckdb_map_type_value_type(type : LogicalType) : LogicalType
+    fun union_type_member_count = duckdb_union_type_member_count(type : LogicalType) : Idx
+    fun union_type_member_name = duckdb_union_type_member_name(type : LogicalType, index : Idx) : LibC::Char*
+    fun union_type_member_type = duckdb_union_type_member_type(type : LogicalType, index : Idx) : LogicalType
+    fun string_is_inlined = duckdb_string_is_inlined(string : StringT) : CBool
+    fun string_t_length = duckdb_string_t_length(string : StringT) : UInt32
+    fun string_t_data = duckdb_string_t_data(string : StringT*) : LibC::Char*
+    fun result_return_type = duckdb_result_return_type(result : Result) : ResultType
+    fun result_error_type = duckdb_result_error_type(result : Result*) : Int32
+    fun from_date = duckdb_from_date(date : Date) : DateParts
+    fun from_time = duckdb_from_time(time : Time) : TimeParts
+    fun is_finite_date = duckdb_is_finite_date(date : Date) : CBool
+    fun is_finite_timestamp = duckdb_is_finite_timestamp(timestamp : Timestamp) : CBool
 
     # # Memory allocation
 
     # Allocate [size] amounts of memory using the duckdb internal malloc function. Any memory allocated in this manner
     # should be freed using duckdb_free
     fun malloc = duckdb_malloc(size : LibC::SizeT) : Void*
-    # Free a value returned from `malloc`, `value_string`, or `value_blob`
+    # Free memory allocated by DuckDB
     fun free = duckdb_free(ptr : Void*) : Void
 
     # # Prepared Statements
@@ -266,6 +297,7 @@ module DuckDB
     fun prepare = duckdb_prepare(connection : Connection, query : LibC::Char*, out_prepared_statement : PreparedStatement*) : State
     fun prepare_error = duckdb_prepare_error(prepared_statement : PreparedStatement) : LibC::Char*
     fun nparams = duckdb_nparams(prepared_statement : PreparedStatement) : Idx
+    fun clear_bindings = duckdb_clear_bindings(prepared_statement : PreparedStatement) : State
 
     # binds parameters to prepared statement
     fun bind_boolean = duckdb_bind_boolean(prepared_statement : PreparedStatement, param_idx : Idx, val : CBool) : State
@@ -291,6 +323,8 @@ module DuckDB
 
     # Executes the prepared statements with currently bound parameters
     fun execute_prepared = duckdb_execute_prepared(prepared_statement : PreparedStatement, out_result : Result*) : State
+
+    fun execute_prepared_streaming = duckdb_execute_prepared_streaming(prepared_statement : PreparedStatement, out_result : Result*) : State
 
     # Destroys the specified prepared statement descriptor
     fun destroy_prepare = duckdb_destroy_prepare(prepared_statement : PreparedStatement*) : Void

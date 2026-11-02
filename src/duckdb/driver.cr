@@ -23,7 +23,7 @@ class DuckDB::Driver < DB::Driver
         if database.nil? || database.closed?
           database = @database = Database.new(@duckdb_options, retained: @pooled)
         end
-        Connection.new(@options, database)
+        Connection.new(@options, database, @duckdb_options.stream_results)
       end
     end
 

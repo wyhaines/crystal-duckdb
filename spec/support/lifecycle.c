@@ -154,3 +154,66 @@ int __wrap_duckdb_appender_destroy(void **appender) {
     if (*appender) appenders--;
     return __real_duckdb_appender_destroy(appender);
 }
+
+/* Match the public duckdb_result layout: fetch_chunk passes all 48 bytes by
+ * value, rather than passing the address as the other result functions do. */
+typedef struct {
+    uint64_t columns_count, rows_count, changed;
+    void *columns;
+    char *error;
+    void *internal;
+} spec_result;
+static int64_t chunks, logical_types, streaming_executions, fetched_chunks, acquired_types;
+int64_t spec_live_chunks(void) { return chunks; }
+int64_t spec_live_logical_types(void) { return logical_types; }
+int64_t spec_streaming_executions(void) { return streaming_executions; }
+int64_t spec_fetched_chunks(void) { return fetched_chunks; }
+int64_t spec_acquired_types(void) { return acquired_types; }
+
+extern int __real_duckdb_execute_prepared_streaming(void *, void *);
+int __wrap_duckdb_execute_prepared_streaming(void *stmt, void *result) {
+    int state = __real_duckdb_execute_prepared_streaming(stmt, result);
+    results++;
+    streaming_executions++;
+    return state;
+}
+
+extern void *__real_duckdb_fetch_chunk(spec_result);
+void *__wrap_duckdb_fetch_chunk(spec_result result) {
+    void *chunk = __real_duckdb_fetch_chunk(result);
+    if (chunk) { chunks++; fetched_chunks++; }
+    return chunk;
+}
+extern void __real_duckdb_destroy_data_chunk(void **);
+void __wrap_duckdb_destroy_data_chunk(void **chunk) {
+    if (*chunk) chunks--;
+    __real_duckdb_destroy_data_chunk(chunk);
+}
+
+#define TYPE_WRAPPER(name) \
+    extern void *__real_##name(void *); \
+    void *__wrap_##name(void *parent) { \
+        void *type = __real_##name(parent); \
+        if (type) { logical_types++; acquired_types++; } \
+        return type; \
+    }
+#define INDEXED_TYPE_WRAPPER(name) \
+    extern void *__real_##name(void *, uint64_t); \
+    void *__wrap_##name(void *parent, uint64_t index) { \
+        void *type = __real_##name(parent, index); \
+        if (type) { logical_types++; acquired_types++; } \
+        return type; \
+    }
+INDEXED_TYPE_WRAPPER(duckdb_column_logical_type)
+INDEXED_TYPE_WRAPPER(duckdb_struct_type_child_type)
+INDEXED_TYPE_WRAPPER(duckdb_union_type_member_type)
+TYPE_WRAPPER(duckdb_vector_get_column_type)
+TYPE_WRAPPER(duckdb_list_type_child_type)
+TYPE_WRAPPER(duckdb_array_type_child_type)
+TYPE_WRAPPER(duckdb_map_type_key_type)
+TYPE_WRAPPER(duckdb_map_type_value_type)
+extern void __real_duckdb_destroy_logical_type(void **);
+void __wrap_duckdb_destroy_logical_type(void **type) {
+    if (*type) logical_types--;
+    __real_duckdb_destroy_logical_type(type);
+}

@@ -1,72 +1,64 @@
 struct DuckDB::Timestamp
-  getter date : Date
-  getter time_of_day : TimeOfDay
+  # Microseconds since the epoch, without narrowing DuckDB's range.
+  getter microseconds : Int64
 
-  delegate year, to: @date
-  delegate month, to: @date
-  delegate day, to: @date
-  delegate hour, to: @time_of_day
-  delegate minute, to: @time_of_day
-  delegate second, to: @time_of_day
-  delegate millisecond, to: @time_of_day
-  delegate microsecond, to: @time_of_day
-  delegate subsecond?, to: @time_of_day
-  delegate submillisecond?, to: @time_of_day
+  delegate year, month, day, to: date
+  delegate hour, minute, second, millisecond, microsecond, subsecond?, submillisecond?, to: time_of_day
 
-  def initialize(@date, @time_of_day)
+  def initialize(date : Date, time_of_day : TimeOfDay)
+    @microseconds = date.days.to_i64 * 86_400_000_000_i64 +
+                    time_of_day.hour.to_i64 * 3_600_000_000_i64 +
+                    time_of_day.minute.to_i64 * 60_000_000_i64 +
+                    time_of_day.second.to_i64 * 1_000_000_i64 + time_of_day.microsecond
   end
 
-  # Initializes a timestamp with a `Time` instance in UTC.
-  #
-  # It raises `ArgumentError` if `time` is not in UTC.
-  # NOTE: Beware the loss of precision in the fractional part (nanoseconds to microseconds)
   def initialize(time : Time)
     raise ArgumentError.new("Time is not in UTC") unless time.utc?
-
-    @date = Date.new(time.year, time.month, time.day)
-    @time_of_day = TimeOfDay.new(time.hour, time.minute, time.second, time.nanosecond // 1000)
+    @microseconds = time.to_unix * 1_000_000_i64 + time.nanosecond // 1000
   end
 
   def initialize(string : String)
     strings = string.split(" ")
-    @date = Date.new(strings[0])
-    @time_of_day = TimeOfDay.new(strings[1])
+    initialize(Date.new(strings[0]), TimeOfDay.new(strings[1]))
   end
 
-  # Initialize with microseconds since `Time::UNIX_EPOCH`
-  def initialize(microseconds : Int64)
-    span = Time::Span.new(nanoseconds: microseconds * 1000)
-    time = Time::UNIX_EPOCH + span
-    @date = Date.new(time)
-    @time_of_day = TimeOfDay.new(time)
+  def initialize(@microseconds : Int64)
+  end
+
+  def date : Date
+    check_finite
+    Date.new((@microseconds // 86_400_000_000_i64).to_i32)
+  end
+
+  def time_of_day : TimeOfDay
+    check_finite
+    TimeOfDay.new(@microseconds % 86_400_000_000_i64)
   end
 
   def ==(other : self) : Bool
-    @date == other.date && @time_of_day == other.time_of_day
+    @microseconds == other.microseconds
   end
 
-  # Returns the timestamp with an ISO 8601 format.
   def to_s
-    "#{@date.to_s} #{@time_of_day.to_s}"
+    return "infinity" if @microseconds == Int64::MAX
+    return "-infinity" if @microseconds == -Int64::MAX
+    "#{date.to_s} #{time_of_day.to_s}"
   end
 
-  # Returns a `Time` instance with the respective timestamp in UTC.
   def to_time
-    Time.utc(
-      @date.year,
-      @date.month,
-      @date.day,
-      @time_of_day.hour,
-      @time_of_day.minute,
-      @time_of_day.second,
-      nanosecond: @time_of_day.microsecond * 1000
-    )
+    midnight = date.to_time
+    midnight + Time::Span.new(seconds: (@microseconds % 86_400_000_000_i64) // 1_000_000,
+      nanoseconds: (@microseconds % 1_000_000) * 1000)
   end
 
   # :nodoc:
   def to_unsafe
-    timestamp = LibDuckDB::Timestamp.new
-    timestamp.micros = (self.to_time - Time::UNIX_EPOCH).total_microseconds.to_i64
-    timestamp
+    LibDuckDB::Timestamp.new(micros: @microseconds)
+  end
+
+  private def check_finite
+    if @microseconds == Int64::MAX || @microseconds == -Int64::MAX
+      raise Exception.new("Cannot convert an infinite DuckDB timestamp to calendar fields or Time")
+    end
   end
 end

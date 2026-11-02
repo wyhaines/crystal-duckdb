@@ -1,148 +1,172 @@
 class DuckDB::ResultSet < DB::ResultSet
-  @row_index = -1
+  @result = LibDuckDB::Result.new
+  @native_alive = false
+  @chunk = Pointer(Void).null.as(LibDuckDB::DataChunk)
+  @readers = [] of ColumnReader
+  @column_names = [] of String
+  @row_index = -1_i64
+  @chunk_size = 0_i64
+  @rows_read = 0_i64
   @column_index = 0
+  @exhausted = false
 
-  macro duckdb_value(kind)
-    LibDuckDB.value_{{kind.id}}(self, @column_index, @row_index)
-  end
-
-  macro duckdb_set_string
-    lib_value = duckdb_value("string")
+  def initialize(statement : Statement | UnpreparedStatement)
+    super(statement)
+    connection = statement.connection.as(Connection)
+    connection.check_query_allowed
+    streaming = connection.stream_results && statement.is_a?(Statement)
+    state = if statement.is_a?(Statement)
+              streaming ? statement.execute_streaming(pointerof(@result)) : LibDuckDB.execute_prepared(statement, pointerof(@result))
+            else
+              LibDuckDB.query(connection, statement.command, pointerof(@result))
+            end
+    @native_alive = true
     begin
-      lib_value.data.null? ? nil : String.new(lib_value.data, lib_value.size)
-    ensure
-      LibDuckDB.free(lib_value.data)
+      check(state)
+      LibDuckDB.column_count(self).times do |index|
+        ptr = LibDuckDB.column_name(self, index)
+        name = ptr.null? ? "" : String.new(ptr)
+        @column_names << name
+        @readers << ColumnReader.build(LibDuckDB.column_logical_type(self, index), name)
+      end
+      connection.register_result(self, streaming)
+      statement.result_opened(self) if statement.is_a?(Statement)
+    rescue ex
+      destroy_native
+      raise ex
     end
   end
 
-  def initialize(@statement : Statement)
-    check LibDuckDB.execute_prepared(duckdb_statement, out @result)
-  end
-
-  def initialize(@statement : UnpreparedStatement)
-    check LibDuckDB.query(@statement.duckdb_connection, @statement.command, out @result)
-  end
-
   protected def do_close
-    LibDuckDB.destroy_result(self)
+    destroy_native
+    connection = @statement.connection.as(Connection)
+    connection.unregister_result(self)
+    statement = @statement
+    statement.result_closed(self) if statement.is_a?(Statement)
     super
   end
 
   def move_next : Bool
+    check_open
+    return false if @exhausted
     @row_index += 1
-    return false if @row_index >= row_count
+    while @row_index >= @chunk_size
+      destroy_chunk
+      @chunk = LibDuckDB.fetch_chunk(@result)
+      if @chunk.null?
+        check_error
+        @exhausted = true
+        @statement.connection.as(Connection).finish_stream(self)
+        return false
+      end
+      chunk = DataChunk.new(@chunk)
+      @chunk_size = chunk.size
+      @row_index = 0_i64
+      @readers.each_with_index { |reader, index| reader.bind(chunk.vector(index)) }
+    end
     @column_index = 0
+    @rows_read += 1
     true
+  rescue ex
+    close
+    raise ex
   end
 
   def read
-    column_type = LibDuckDB.column_type(self, @column_index)
-
-    if column_type.sqlnull? || !duckdb_value("is_null").zero?
-      @column_index += 1
-      return nil
-    end
-
-    value = case column_type
-      when .invalid?
-        raise Exception.new("Invalid column type at row #{@row_index} and column #{@column_index}")
-      when .tinyint?
-        duckdb_value("int8")
-      when .smallint?
-        duckdb_value("int16")
-      when .integer?
-        duckdb_value("int32")
-      when .bigint?
-        duckdb_value("int64")
-      when .utinyint?
-        duckdb_value("uint8")
-      when .usmallint?
-        duckdb_value("uint16")
-      when .uinteger?
-        duckdb_value("uint32")
-      when .ubigint?
-        duckdb_value("uint64")
-      when .float?
-        duckdb_value("float")
-      when .double?
-        duckdb_value("double")
-      when .boolean?
-        duckdb_value("boolean") != 0
-      when .varchar?
-        duckdb_set_string
-      when .blob?
-        blob = duckdb_value("blob")
-        bytes = Bytes.new(blob.size)
-        bytes.copy_from(blob.data.as(UInt8*), blob.size)
-        LibDuckDB.free(blob.data)
-        bytes
-      when .timestamp?
-        Timestamp.new duckdb_value("timestamp").micros
-      when .date?
-        Date.new duckdb_value("date").days
-      when .time?
-        TimeOfDay.new duckdb_value("time").micros
-      when .interval?
-        lib_i = duckdb_value("interval")
-        Interval.new lib_i.micros, lib_i.days, lib_i.months
-      when .hugeint?
-        HugeIntHelper.huge_to_i128(duckdb_value("hugeint"))
-      else
-        # Treat non supported types as strings
-        duckdb_set_string
-      end
+    reader = current_reader
     @column_index += 1
-    value
+    reader.read(@row_index)
+  rescue ex
+    close
+    raise ex
   end
 
-  def read(t : Time.class) : Time
-    read(Timestamp).to_time
-  end
-
-  def read(t : Time?.class) : Time?
-    read(Timestamp?).try &.to_time
+  # Typed scalar reads avoid building the full DuckDB::Any union.
+  def read(type : T.class) : T forall T
+    {% if T == ::Time %}
+      read(DuckDB::Timestamp).to_time
+    {% elsif T == Union(::Time, Nil) %}
+      read(DuckDB::Timestamp?).try &.to_time
+    {% else %}
+      {% scalar = T.union? ? T.union_types.reject { |member| member == Nil } : [T] %}
+      {% supported = [Bool, Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, Float32, Float64, String, Bytes, DuckDB::Date, DuckDB::TimeOfDay, DuckDB::Timestamp, DuckDB::Interval] %}
+      {% if scalar.size == 1 && supported.includes?(scalar[0]) %}
+        reader = current_reader
+        if reader.is_a?(ScalarColumnReader({{scalar[0]}}))
+          if reader.vector.null?(@row_index)
+            {% if T.nilable? %}
+              @column_index += 1
+              return nil
+            {% end %}
+          else
+            @column_index += 1
+            return reader.read_value(@row_index)
+          end
+        end
+      {% end %}
+      super
+    {% end %}
+  rescue ex : DB::ColumnTypeMismatchError
+    # crystal-db permits recovering from a typed mismatch at the next column.
+    raise ex
+  rescue ex
+    close
+    raise ex
   end
 
   def column_count : Int32
-    LibDuckDB.column_count(self).to_i32
+    check_open
+    @readers.size
   end
 
   def column_name(index : Int32) : String
-    p = LibDuckDB.column_name(self, index)
-    p.null? ? "" : String.new(p)
+    check_open
+    @column_names[index]? || ""
   end
 
   def next_column_index : Int32
-    @column_index <= column_count ? @column_index : column_count
-  end
-
-  protected def row_count
-    LibDuckDB.row_count(self).to_i64
-  end
-
-  protected def rows_changed
-    LibDuckDB.rows_changed(self).to_i64
-  end
-
-  protected def duckdb_statement
-    @statement.as(Statement)
+    check_open
+    @column_index
   end
 
   def to_unsafe
     pointerof(@result)
   end
 
+  private def current_reader : ColumnReader
+    check_open
+    if @chunk.null? || @row_index < 0 || @exhausted
+      raise Exception.new("Result is not positioned on a row")
+    end
+    @readers[@column_index]? || raise Exception.new("No more columns in this row")
+  end
+
+  private def check_open
+    raise Exception.new("Result set is closed") if closed?
+  end
+
+  private def destroy_chunk
+    LibDuckDB.destroy_data_chunk(pointerof(@chunk)) unless @chunk.null?
+  end
+
+  private def destroy_native
+    return unless @native_alive
+    @native_alive = false
+    destroy_chunk
+    @readers.each &.close
+    @readers.clear
+    LibDuckDB.destroy_result(self)
+  end
+
   private def check(state : LibDuckDB::State)
     unless state.success?
-      message_p = LibDuckDB.result_error(self)
-
-      message = if message_p.null?
-                  "Error with command `#{@statement.command}`"
-                else
-                  String.new(message_p)
-                end
-      LibDuckDB.destroy_result(self)
-      raise Exception.new(message)
+      check_error
+      raise Exception.new("Error with command `#{@statement.command}`")
     end
+  end
+
+  private def check_error
+    ptr = LibDuckDB.result_error(self)
+    raise Exception.new(String.new(ptr)) unless ptr.null?
   end
 end

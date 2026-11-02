@@ -8,12 +8,6 @@ describe DuckDB::LibDuckDB::Type do
   end
 end
 
-describe "DuckDB string ABI" do
-  it "returns duckdb_string by value, with both data and size" do
-    sizeof(typeof(DuckDB::LibDuckDB.value_string(Pointer(DuckDB::LibDuckDB::Result).null, 0, 0))).should eq(sizeof(Void*) + sizeof(UInt64))
-  end
-end
-
 describe "DuckDB prepared statement ABI" do
   it "returns the parameter count directly" do
     with_cnn do |cnn|
