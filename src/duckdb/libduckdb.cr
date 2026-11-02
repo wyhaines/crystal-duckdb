@@ -7,6 +7,7 @@ module DuckDB
     type Database = Void*
     type Connection = Void*
     type PreparedStatement = Void*
+    type ExtractedStatements = Void*
     type Appender = Void*
     type Arrow = Void*
     type Config = Void*
@@ -292,6 +293,10 @@ module DuckDB
     fun free = duckdb_free(ptr : Void*) : Void
 
     # # Prepared Statements
+
+    fun extract_statements = duckdb_extract_statements(connection : Connection, query : LibC::Char*, out_extracted_statements : ExtractedStatements*) : Idx
+    fun extract_statements_error = duckdb_extract_statements_error(extracted_statements : ExtractedStatements) : LibC::Char*
+    fun destroy_extracted = duckdb_destroy_extracted(extracted_statements : ExtractedStatements*) : Void
 
     # prepares the specified SQL query in the specified connection handle. [OUT: prepared statement descriptor]
     fun prepare = duckdb_prepare(connection : Connection, query : LibC::Char*, out_prepared_statement : PreparedStatement*) : State

@@ -217,3 +217,19 @@ void __wrap_duckdb_destroy_logical_type(void **type) {
     if (*type) logical_types--;
     __real_duckdb_destroy_logical_type(type);
 }
+
+static _Atomic int64_t extracted_statements;
+int64_t spec_live_extracted_statements(void) { return extracted_statements; }
+
+extern uint64_t __real_duckdb_extract_statements(void *, const char *, void **);
+uint64_t __wrap_duckdb_extract_statements(void *conn, const char *sql, void **extracted) {
+    uint64_t count = __real_duckdb_extract_statements(conn, sql, extracted);
+    if (*extracted) extracted_statements++;
+    return count;
+}
+
+extern void __real_duckdb_destroy_extracted(void **);
+void __wrap_duckdb_destroy_extracted(void **extracted) {
+    if (*extracted) extracted_statements--;
+    __real_duckdb_destroy_extracted(extracted);
+}

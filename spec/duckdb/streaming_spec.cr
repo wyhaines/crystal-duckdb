@@ -2,7 +2,7 @@ require "../spec_helper"
 require "../support/lifecycle"
 
 private def streaming_handles
-  {NativeLifetime.results, NativeLifetime.statements, NativeLifetime.chunks, NativeLifetime.logical_types}
+  {NativeLifetime.results, NativeLifetime.statements, NativeLifetime.chunks, NativeLifetime.logical_types, NativeLifetime.extracted_statements}
 end
 
 describe "DuckDB streaming" do
@@ -23,6 +23,67 @@ describe "DuckDB streaming" do
       NativeLifetime.streaming_executions.should eq(calls + 2)
       cnn.exec("SELECT 45")
       NativeLifetime.streaming_executions.should eq(calls + 2)
+    end
+  end
+
+  it "materializes multi-statement unprepared SQL and returns the last statement's rows" do
+    DB.connect "duckdb::memory:?stream_results=true" do |cnn|
+      before = streaming_handles
+      calls = NativeLifetime.streaming_executions
+      cnn.unprepared.query("CREATE TABLE multi_stream AS SELECT 1 AS i; SELECT * FROM multi_stream") do |rs|
+        rs.move_next.should be_true
+        rs.read(Int32).should eq(1)
+        rs.move_next.should be_false
+      end
+      NativeLifetime.streaming_executions.should eq(calls)
+      streaming_handles.should eq(before)
+    end
+  end
+
+  it "streams one unprepared statement even with semicolons in strings and comments" do
+    DB.connect "duckdb::memory:?stream_results=true" do |cnn|
+      before = streaming_handles
+      calls = NativeLifetime.streaming_executions
+      cnn.unprepared.query("-- ignored; separator\nSELECT 'one;two'; -- trailing; comment") do |rs|
+        NativeLifetime.streaming_executions.should eq(calls + 1)
+        NativeLifetime.extracted_statements.should eq(before[4])
+        rs.move_next.should be_true
+        rs.read(String).should eq("one;two")
+      end
+      streaming_handles.should eq(before)
+    end
+  end
+
+  it "raises DuckDB's extraction error and frees handles on extraction, prepare and execute errors" do
+    DB.connect "duckdb::memory:?stream_results=true" do |cnn|
+      before = streaming_handles
+      expect_raises(DuckDB::Exception, /Parser Error:.*syntax error/) do
+        cnn.unprepared.query("SELEC 1") { |_| }
+      end
+      streaming_handles.should eq(before)
+      expect_raises(DuckDB::Exception, /Catalog Error/) do
+        cnn.unprepared.query("SELECT * FROM missing_unprepared_stream_table") { |_| }
+      end
+      streaming_handles.should eq(before)
+      expect_raises(DuckDB::Exception, /Conversion Error/) do
+        cnn.unprepared.query("SELECT 'bad'::INTEGER") { |rs| rs.each { rs.read } }
+      end
+      streaming_handles.should eq(before)
+      # Materialized multi-statement execution errors must free extraction too.
+      expect_raises(DuckDB::Exception, /Conversion Error/) do
+        cnn.unprepared.query("SELECT 1; SELECT 'bad'::INTEGER") { |_| }
+      end
+      streaming_handles.should eq(before)
+    end
+  end
+
+  it "frees extraction handles when unprepared SQL contains no statements" do
+    DB.connect "duckdb::memory:?stream_results=true" do |cnn|
+      before = streaming_handles
+      calls = NativeLifetime.streaming_executions
+      cnn.unprepared.query("-- only a comment;") { |rs| rs.move_next.should be_false }
+      NativeLifetime.streaming_executions.should eq(calls)
+      streaming_handles.should eq(before)
     end
   end
 

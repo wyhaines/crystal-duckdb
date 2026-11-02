@@ -1,6 +1,16 @@
 require "../spec_helper"
 require "../support/lifecycle"
 
+private def walk_statement_nodes(cnn : DuckDB::Connection, id : Int64, rows : Array(Int64)) : Nil
+  cnn.query("SELECT id FROM statement_nodes WHERE parent = ? ORDER BY id", id) do |rs|
+    rs.each do
+      child = rs.read(Int64)
+      rows << child
+      walk_statement_nodes(cnn, child, rows)
+    end
+  end
+end
+
 describe "DuckDB statement correctness" do
   it "reuses cached statements with new bindings and rejects missing or extra arguments" do
     with_cnn do |cnn|
@@ -15,16 +25,85 @@ describe "DuckDB statement correctness" do
     end
   end
 
-  it "rejects re-execution with an open result and resumes after closing it" do
+  it "reads two interleaved materialized results from one cached statement" do
     with_cnn do |cnn|
-      statement = cnn.prepared("SELECT ?::INTEGER")
-      rs = statement.query(1)
-      expect_raises(DuckDB::Exception, /previous result/) { statement.query(2) }
-      expect_raises(DuckDB::Exception, /previous result/) { statement.exec(2) }
+      sql = "SELECT i + ?::BIGINT FROM range(5000) t(i)"
+      first = cnn.query(sql, 10_i64)
+      second = cnn.query(sql, 20_i64)
+      second.statement.should be(first.statement)
+      # Exec must also leave both materialized results intact.
+      first.statement.exec(30_i64)
+      5000.times do |i|
+        first.move_next.should be_true
+        first.read(Int64).should eq(i + 10)
+        second.move_next.should be_true
+        second.read(Int64).should eq(i + 20)
+      end
+      first.close
+      second.closed?.should be_false
+      second.move_next.should be_false
+      second.close
+    ensure
+      first.try &.close
+      second.try &.close
+    end
+  end
+
+  it "reuses the same cached SQL through a recursive walk at depth four" do
+    with_cnn do |cnn|
+      cnn.exec "CREATE TABLE statement_nodes (id BIGINT, parent BIGINT)"
+      cnn.exec "INSERT INTO statement_nodes VALUES (1, 0), (2, 0), (3, 1), (4, 1), (5, 3), (6, 5), (7, 2), (8, 7), (9, 8)"
+      rows = [] of Int64
+      walk_statement_nodes(cnn, 0_i64, rows)
+      rows.should eq([1_i64, 3, 5, 6, 4, 2, 7, 8, 9])
+    end
+  end
+
+  it "keeps older materialized results readable after a later execution fails" do
+    DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
+      before = NativeLifetime.statements
+      rs = cnn.query("SELECT ?::INTEGER", 42)
+      expect_raises(DuckDB::Exception, /Conversion Error/) { rs.statement.query("bad") }
       rs.move_next.should be_true
-      rs.read(Int32).should eq(1)
+      rs.read(Int32).should eq(42)
       rs.close
-      statement.scalar(2).should eq(2)
+      NativeLifetime.statements.should eq(before)
+    ensure
+      rs.try &.close
+    end
+  end
+
+  it "closes an auto-closing statement only after its last result closes" do
+    with_cnn do |cnn|
+      before = NativeLifetime.statements
+      statement = cnn.build_prepared_statement("SELECT ?::INTEGER")
+      statement.auto_close = true
+      first = statement.query(1)
+      second = statement.query(2)
+      first.close
+      statement.closed?.should be_false
+      statement.exec(3)
+      statement.closed?.should be_false
+      second.move_next.should be_true
+      second.read(Int32).should eq(2)
+      second.close
+      statement.closed?.should be_true
+      NativeLifetime.statements.should eq(before)
+    ensure
+      statement.try &.close
+    end
+  end
+
+  it "still rejects the same cached SQL while a streaming result is active" do
+    DB.connect "duckdb::memory:?stream_results=true" do |cnn|
+      rs = cnn.query("SELECT ?::BIGINT FROM range(100000)", 1_i64)
+      expect_raises(DuckDB::Exception, /active streaming result/) { rs.statement.query(2_i64) }
+      expect_raises(DuckDB::Exception, /active streaming result/) { rs.statement.exec(2_i64) }
+      rs.move_next.should be_true
+      rs.read(Int64).should eq(1)
+      statement = rs.statement
+      rs.close
+      statement.scalar(2_i64).should eq(2)
     ensure
       rs.try &.close
     end
@@ -42,17 +121,20 @@ describe "DuckDB statement correctness" do
     end
   end
 
-  it "closes an active result when its statement is explicitly closed" do
-    before = NativeLifetime.statements
+  it "closes every open result when its statement is explicitly closed" do
+    before = {NativeLifetime.statements, NativeLifetime.results, NativeLifetime.chunks, NativeLifetime.logical_types}
     with_cnn do |cnn|
-      statement = cnn.build_prepared_statement("SELECT 42")
-      rs = statement.query
-      rs.move_next
+      statement = cnn.build_prepared_statement("SELECT ?::INTEGER")
+      results = [statement.query(1), statement.query(2), statement.query(3)]
+      results[0].move_next
+      results[1].move_next
       statement.close
-      rs.closed?.should be_true
-      expect_raises(DuckDB::Exception, /Statement is closed/) { statement.query }
+      results.each { |rs| rs.closed?.should be_true }
+      expect_raises(DuckDB::Exception, /Statement is closed/) { statement.query(4) }
+    ensure
+      statement.try &.close
     end
-    NativeLifetime.statements.should eq(before)
+    {NativeLifetime.statements, NativeLifetime.results, NativeLifetime.chunks, NativeLifetime.logical_types}.should eq(before)
   end
 
   it "releases uncached statements after successful query blocks" do
@@ -103,13 +185,17 @@ describe "DuckDB statement correctness" do
 end
 
 describe "DuckDB result pool ownership" do
-  it "keeps the connection checked out when a second execution is rejected" do
+  it "keeps the connection checked out until all results from one statement close" do
     with_db "max_pool_size=1&checkout_timeout=0.01" do |db|
       rs = db.query("SELECT ?::INTEGER", 1)
       statement = rs.statement
-      expect_raises(DuckDB::Exception, /previous result/) { statement.query(2) }
+      second = statement.query(2)
       db.pool.stats.idle_connections.should eq(0)
       rs.close
+      db.pool.stats.idle_connections.should eq(0)
+      second.move_next.should be_true
+      second.read(Int32).should eq(2)
+      second.close
       db.pool.stats.idle_connections.should eq(1)
     end
   end

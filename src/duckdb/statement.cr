@@ -13,14 +13,14 @@ class DuckDB::Statement < DB::Statement
     end
   end
 
-  @active_result : ResultSet?
+  @active_results = Set(ResultSet).new
   @closing = false
 
   protected def perform_query(args : Enumerable) : DB::ResultSet
     bind_args(args)
     ResultSet.new(self)
   rescue ex
-    close if auto_close && @active_result.nil?
+    close if auto_close && @active_results.empty?
     raise ex
   end
 
@@ -38,7 +38,7 @@ class DuckDB::Statement < DB::Statement
       LibDuckDB.destroy_result(pointerof(result))
     end
   ensure
-    close if auto_close && @active_result.nil?
+    close if auto_close && @active_results.empty?
   end
 
   # The only streaming execution entry point. Replace this method when a stable
@@ -49,19 +49,25 @@ class DuckDB::Statement < DB::Statement
 
   # :nodoc:
   def result_opened(result : ResultSet)
-    @active_result = result
+    @active_results.add(result)
   end
 
   # :nodoc:
   def result_closed(result : ResultSet)
-    @active_result = nil if @active_result.same?(result)
+    @active_results.delete(result)
+  end
+
+  # :nodoc:
+  def release_from_result_set
+    close if auto_close && @active_results.empty?
+    release_connection
   end
 
   protected def do_close
     return if @closing
     @closing = true
     begin
-      @active_result.try &.close
+      @active_results.dup.each &.close
     ensure
       LibDuckDB.destroy_prepare(pointerof(@statement))
       @closing = false
@@ -70,7 +76,6 @@ class DuckDB::Statement < DB::Statement
 
   private def bind_args(args : Enumerable)
     raise Exception.new("Statement is closed") if closed?
-    raise Exception.new("Close the previous result before re-executing this statement") if @active_result
     @connection.as(Connection).check_query_allowed
     expected = LibDuckDB.nparams(self)
     unless args.size == expected

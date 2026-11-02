@@ -7,7 +7,7 @@ class DuckDB::UnpreparedStatement < DB::Statement
   protected def perform_query(args : Enumerable) : DB::ResultSet
     raise Exception.new("Unprepared statement exec/query with args is not supported") if args.size > 0
     @connection.as(Connection).check_query_allowed
-    if @connection.as(Connection).stream_results
+    if @connection.as(Connection).stream_results && single_statement?
       statement = Statement.new(@connection, @command)
       statement.auto_close = true
       close if auto_close
@@ -41,6 +41,17 @@ class DuckDB::UnpreparedStatement < DB::Statement
 
   protected def duckdb_connection
     @connection.as(Connection).to_unsafe
+  end
+
+  private def single_statement? : Bool
+    count = LibDuckDB.extract_statements(duckdb_connection, @command, out extracted)
+    begin
+      message_p = LibDuckDB.extract_statements_error(extracted)
+      raise Exception.new(String.new(message_p)) unless message_p.null?
+      count == 1
+    ensure
+      LibDuckDB.destroy_extracted(pointerof(extracted))
+    end
   end
 
 end
