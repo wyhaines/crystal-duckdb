@@ -81,30 +81,29 @@ class DuckDB::ResultSet < DB::ResultSet
     raise ex
   end
 
-  # Typed scalar reads avoid building the full DuckDB::Any union.
+  # Typed scalar reads avoid building the full DuckDB::Value union.
   def read(type : T.class) : T forall T
-    {% if T == ::Time %}
-      read(DuckDB::Timestamp).to_time
-    {% elsif T == Union(::Time, Nil) %}
-      read(DuckDB::Timestamp?).try &.to_time
-    {% else %}
-      {% scalar = T.union? ? T.union_types.reject { |member| member == Nil } : [T] %}
-      {% supported = [Bool, Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, Float32, Float64, String, Bytes, DuckDB::Date, DuckDB::TimeOfDay, DuckDB::Timestamp, DuckDB::Interval] %}
-      {% if scalar.size == 1 && supported.includes?(scalar[0]) %}
-        reader = current_reader
-        if reader.is_a?(ScalarColumnReader({{scalar[0]}}))
-          if reader.vector.null?(@row_index)
-            {% if T.nilable? %}
-              @column_index += 1
-              return nil
-            {% end %}
-          else
+    {% begin %}
+    {% scalar = T.union? ? T.union_types.reject { |member| member == Nil } : [T] %}
+    {% supported = [Bool, Int8, Int16, Int32, Int64, Int128, UInt8, UInt16, UInt32, UInt64, UInt128, Float32, Float64, String, Bytes, UUID, DuckDB::Decimal, DuckDB::Date, DuckDB::TimeOfDay, DuckDB::TimeTZ, DuckDB::Timestamp, DuckDB::Interval, DuckDB::BigNum] %}
+    {% if scalar.size == 1 && supported.includes?(scalar[0]) %}
+      reader = current_reader
+      if reader.is_a?(ScalarColumnReader({{scalar[0]}}))
+        if reader.vector.null?(@row_index)
+          {% if T.nilable? %}
             @column_index += 1
-            return reader.read_value(@row_index)
-          end
+            return nil
+          {% end %}
+        else
+          @column_index += 1
+          return reader.read_value(@row_index)
         end
-      {% end %}
-      super
+      end
+    {% end %}
+    reader = current_reader
+    column_index = @column_index
+    @column_index += 1
+    reader.read_as(@row_index, type, column_index)
     {% end %}
   rescue ex : DB::ColumnTypeMismatchError
     # crystal-db permits recovering from a typed mismatch at the next column.

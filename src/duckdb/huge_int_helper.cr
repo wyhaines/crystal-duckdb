@@ -1,23 +1,19 @@
 module DuckDB
   module HugeIntHelper
-    private FORMAT = IO::ByteFormat::BigEndian
-
     def self.huge_to_i128(value : LibDuckDB::HugeInt) : Int128
-      aux_io = IO::Memory.new(16)
-      aux_io.write_bytes(value.upper, FORMAT)
-      aux_io.write_bytes(value.lower, FORMAT)
-      aux_io.rewind
-      Int128.from_io(aux_io, FORMAT)
+      (value.upper.to_i128 << 64) | value.lower.to_i128
     end
 
     def self.i128_to_huge(value : Int128) : LibDuckDB::HugeInt
-      aux_io = IO::Memory.new(16)
-      value.to_io(aux_io, FORMAT)
-      aux_io.rewind
-      result = LibDuckDB::HugeInt.new
-      result.upper = Int64.from_io(aux_io, FORMAT)
-      result.lower = UInt64.from_io(aux_io, FORMAT)
-      result
+      LibDuckDB::HugeInt.new(lower: value.to_u64!, upper: (value >> 64).to_i64)
+    end
+
+    def self.uhuge_to_u128(value : LibDuckDB::UHugeInt) : UInt128
+      (value.upper.to_u128 << 64) | value.lower.to_u128
+    end
+
+    def self.u128_to_uhuge(value : UInt128) : LibDuckDB::UHugeInt
+      LibDuckDB::UHugeInt.new(lower: value.to_u64!, upper: (value >> 64).to_u64)
     end
   end
 end

@@ -103,6 +103,39 @@ class DuckDB::Statement < DB::Statement
     check LibDuckDB.bind_hugeint(self, index, HugeIntHelper.i128_to_huge(value))
   end
 
+  private def bind_arg(index, value : UInt128)
+    check LibDuckDB.bind_uhugeint(self, index, HugeIntHelper.u128_to_uhuge(value))
+  end
+
+  private def bind_arg(index, value : Decimal)
+    check LibDuckDB.bind_decimal(self, index, value)
+  end
+
+  private def bind_arg(index, value : UUID)
+    raw = value.bytes.reduce(0_u128) { |acc, byte| (acc << 8) | byte.to_u128 }
+    bind_owned_value(index, LibDuckDB.create_uuid(HugeIntHelper.u128_to_uhuge(raw)))
+  end
+
+  private def bind_arg(index, value : BigNum)
+    bytes = value.bytes[3..]
+    bytes.map! { |byte| ~byte } if value.negative?
+    native = LibDuckDB::BigNum.new(data: bytes.to_unsafe, size: bytes.size.to_u64, is_negative: value.negative? ? 1_u8 : 0_u8)
+    bind_owned_value(index, LibDuckDB.create_bignum(native))
+  end
+
+  private def bind_arg(index, value : TimeTZ)
+    bind_owned_value(index, LibDuckDB.create_time_tz_value(value))
+  end
+
+  private def bind_owned_value(index, value : LibDuckDB::Value)
+    raise Exception.new("Could not create DuckDB parameter value") if value.null?
+    begin
+      check LibDuckDB.bind_value(self, index, value)
+    ensure
+      LibDuckDB.destroy_value(pointerof(value))
+    end
+  end
+
   private def bind_arg(index, value : Float32)
     check LibDuckDB.bind_float(self, index, value)
   end
@@ -120,11 +153,34 @@ class DuckDB::Statement < DB::Statement
   end
 
   private def bind_arg(index, value : TimeOfDay)
-    check LibDuckDB.bind_time(self, index, value)
+    if value.nanoseconds % 1000 == 0
+      check LibDuckDB.bind_time(self, index, value)
+    else
+      bind_owned_value(index, LibDuckDB.create_time_ns(LibDuckDB::TimeNS.new(nanos: value.nanoseconds)))
+    end
   end
 
   private def bind_arg(index, value : Timestamp)
-    check LibDuckDB.bind_timestamp(self, index, value)
+    if value.infinite? || (value.nanoseconds % 1000 == 0 && -Int64::MAX < value.nanoseconds // 1000 < Int64::MAX)
+      if value.timezone?
+        bind_owned_value(index, LibDuckDB.create_timestamp_tz(value.to_unsafe))
+      else
+        check LibDuckDB.bind_timestamp(self, index, value)
+      end
+    else
+      nanos = value.nanoseconds
+      if value.timezone?
+        raise Exception.new("Nanosecond TIMESTAMP_TZ binding is unavailable in the DuckDB 1.5.6 v1 C API")
+      elsif -Int64::MAX < nanos < Int64::MAX
+        bind_owned_value(index, LibDuckDB.create_timestamp_ns(LibDuckDB::TimestampNS.new(nanos: nanos.to_i64)))
+      elsif nanos % 1_000_000 == 0 && -Int64::MAX < nanos // 1_000_000 < Int64::MAX
+        bind_owned_value(index, LibDuckDB.create_timestamp_ms(LibDuckDB::TimestampMS.new(millis: (nanos // 1_000_000).to_i64)))
+      elsif nanos % 1_000_000_000 == 0 && -Int64::MAX < nanos // 1_000_000_000 < Int64::MAX
+        bind_owned_value(index, LibDuckDB.create_timestamp_s(LibDuckDB::TimestampS.new(seconds: (nanos // 1_000_000_000).to_i64)))
+      else
+        raise Exception.new("Timestamp is outside DuckDB's range or cannot be bound exactly")
+      end
+    end
   end
 
   private def bind_arg(index, value : Time)

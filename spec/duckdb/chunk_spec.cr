@@ -113,15 +113,7 @@ describe "DuckDB chunk reader" do
     DB.connect "duckdb::memory:?prepared_statements_cache=false" do |cnn|
       before = native_reader_handles
       {
-        "DECIMAL" => "12.34::DECIMAL(4,2)",
-        "LIST" => "[1, NULL, 3]",
-        "STRUCT" => "{'a': 1, 'b': [2]}",
-        "MAP" => "map(['a'], [1])",
-        "ARRAY" => "[1, 2]::INTEGER[2]",
-        "UNION" => "union_value(a := 42)",
-        "UUID" => "'00000000-0000-0000-0000-000000000000'::UUID",
-        "ENUM" => "'a'::ENUM('a', 'b')",
-        "TIMESTAMP_NS" => "'2020-01-01'::TIMESTAMP_NS",
+        "VARIANT" => "42::VARIANT",
       }.each do |type, sql|
         expect_raises(DuckDB::Exception, /#{type}.*named_column/) do
           cnn.query("SELECT #{sql} AS named_column") { |rs| rs.move_next; rs.read }

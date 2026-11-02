@@ -233,3 +233,36 @@ void __wrap_duckdb_destroy_extracted(void **extracted) {
     if (*extracted) extracted_statements--;
     __real_duckdb_destroy_extracted(extracted);
 }
+
+/* Values used for exact parameter binding, plus dictionary allocation counts. */
+static int64_t owned_values, enum_dictionary_reads;
+int64_t spec_live_values(void) { return owned_values; }
+int64_t spec_enum_dictionary_reads(void) { return enum_dictionary_reads; }
+#define VALUE_WRAPPER(name, type) \
+    extern void *__real_##name(type); \
+    void *__wrap_##name(type input) { \
+        void *value = __real_##name(input); \
+        if (value) owned_values++; \
+        return value; \
+    }
+typedef struct { uint64_t lower, upper; } spec_uhugeint;
+typedef struct { int64_t count; } spec_temporal;
+typedef struct { void *data; uint64_t size; uint8_t is_negative; } spec_bignum;
+VALUE_WRAPPER(duckdb_create_uuid, spec_uhugeint)
+VALUE_WRAPPER(duckdb_create_bignum, spec_bignum)
+VALUE_WRAPPER(duckdb_create_time_ns, spec_temporal)
+VALUE_WRAPPER(duckdb_create_time_tz_value, spec_temporal)
+VALUE_WRAPPER(duckdb_create_timestamp_s, spec_temporal)
+VALUE_WRAPPER(duckdb_create_timestamp_ms, spec_temporal)
+VALUE_WRAPPER(duckdb_create_timestamp_ns, spec_temporal)
+VALUE_WRAPPER(duckdb_create_timestamp_tz, spec_temporal)
+extern void __real_duckdb_destroy_value(void **);
+void __wrap_duckdb_destroy_value(void **value) {
+    if (*value) owned_values--;
+    __real_duckdb_destroy_value(value);
+}
+extern char *__real_duckdb_enum_dictionary_value(void *, uint64_t);
+char *__wrap_duckdb_enum_dictionary_value(void *type, uint64_t index) {
+    enum_dictionary_reads++;
+    return __real_duckdb_enum_dictionary_value(type, index);
+}

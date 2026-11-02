@@ -1,90 +1,103 @@
-# Represents the TIME data type of SQL within DuckDB.
-#
+# TIME and TIME_NS, including DuckDB's valid end-of-day value 24:00:00.
 struct DuckDB::TimeOfDay
-  getter hour : Int32
-  getter minute : Int32
-  getter second : Int32
-  getter microsecond : Int32
+  NANOSECONDS_PER_DAY = 86_400_000_000_000_i64
 
-  def initialize(@hour, @minute, @second = 0, @microsecond = 0)
-    if @hour < 0 || @hour > 24 || @minute < 0 || @minute > 60 || @minute < 0 || @minute > 60 || @second < 0 || @second > 60 || @microsecond < 0 || @microsecond > 1_000_000
-      raise ArgumentError.new("Invalid time of day values.")
+  getter nanoseconds : Int64
+
+  def initialize(hour : Int32, minute : Int32, second : Int32 = 0, microsecond : Int32 = 0)
+    unless 0 <= hour <= 24 && 0 <= minute < 60 && 0 <= second < 60 && 0 <= microsecond < 1_000_000 &&
+           (hour != 24 || (minute == 0 && second == 0 && microsecond == 0))
+      raise ArgumentError.new("Invalid time of day values")
     end
+    @nanoseconds = ((hour.to_i64 * 3600 + minute * 60 + second) * 1_000_000 + microsecond) * 1000
   end
 
-  # NOTE: It raises `ArgumentError` if `time` is not in UTC.
-  # NOTE: Beware the loss of precision in the fractional part (nanoseconds to microseconds)
   def initialize(time : Time)
     raise ArgumentError.new("Time is not in UTC") unless time.utc?
-
-    @hour = time.hour
-    @minute = time.minute
-    @second = time.second
-    @microsecond = time.nanosecond // 1000
+    @nanoseconds = (time.hour.to_i64 * 3600 + time.minute * 60 + time.second) * 1_000_000_000 + time.nanosecond
   end
 
-  # NOTE: It raises `ArgumentError` unless `span` is less than one day.
-  # NOTE: Beware of loss of precision for the fractional part (nanoseconds to microseconds).
   def initialize(span : Time::Span)
-    raise ArgumentError.new("Time span must have less than one day of duration.") if span.days >= 1
-    @hour = span.hours
-    @minute = span.minutes
-    @second = span.seconds
-    @microsecond = span.nanoseconds // 1000
+    raise ArgumentError.new("Time span must be nonnegative and less than one day") unless Time::Span.zero <= span < 1.day
+    @nanoseconds = span.to_i * 1_000_000_000 + span.nanoseconds
   end
 
   def initialize(string : String)
-    format = string.includes?(".") ? DuckDB::TIME_OF_DAY_FORMAT_SUBSECOND : DuckDB::TIME_OF_DAY_FORMAT_SECOND
-    time = Time.parse(string, format, DuckDB::TIMEZONE)
-    @hour = time.hour
-    @minute = time.minute
-    @second = time.second
-    @microsecond = time.nanosecond // 1000
+    match = /\A(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?\z/.match(string)
+    raise ArgumentError.new("Invalid time of day") unless match
+    base = TimeOfDay.new(match[1].to_i, match[2].to_i, match[3].to_i)
+    @nanoseconds = base.nanoseconds + (match[4]?.try(&.ljust(9, '0').to_i64) || 0_i64)
+    validate
   end
 
-  # Initialize with microseconds since 00:00:00
-  # NOTE: It raises `ArgumentError` unless `microseconds` represent less than one day. 
+  # Microseconds since midnight, retained for compatibility.
   def initialize(microseconds : Int64)
-    span = Time::Span.new(nanoseconds: microseconds * 1000)
-    raise ArgumentError.new("The value of microseconds must represent less than one day.") if span.days >= 1
-    @hour = span.hours
-    @minute = span.minutes
-    @second = span.seconds
-    @microsecond = span.nanoseconds // 1000
+    unless 0 <= microseconds <= NANOSECONDS_PER_DAY // 1000
+      raise ArgumentError.new("Microseconds must be within 00:00:00..24:00:00")
+    end
+    @nanoseconds = microseconds * 1000
   end
 
-  def millisecond
-    microsecond // 1000
+  def self.from_nanoseconds(nanoseconds : Int64) : self
+    new(nanoseconds: nanoseconds)
   end
 
-  def subsecond?
-    @microsecond > 0
+  private def initialize(*, @nanoseconds : Int64)
+    validate
   end
 
-  def submillisecond?
-    @microsecond < 1000
-  end
-
-  def ==(other : self) : Bool
-    @hour == other.hour && @minute == other.minute && @second == other.second && @microsecond == other.microsecond
-  end
-
-  def to_s
-    String.build(16) do |str|
-      str << sprintf("%02d:%02d:%02d", @hour, @minute, @second)
-      str << sprintf(".%06d", @microsecond).gsub(/0+$/, "") unless @microsecond.zero?
+  private def validate
+    unless 0 <= @nanoseconds <= NANOSECONDS_PER_DAY
+      raise ArgumentError.new("Nanoseconds must be within 00:00:00..24:00:00")
     end
   end
 
+  def hour : Int32
+    (@nanoseconds // 3_600_000_000_000).to_i32
+  end
+
+  def minute : Int32
+    (@nanoseconds // 60_000_000_000 % 60).to_i32
+  end
+
+  def second : Int32
+    (@nanoseconds // 1_000_000_000 % 60).to_i32
+  end
+
+  def nanosecond : Int32
+    (@nanoseconds % 1_000_000_000).to_i32
+  end
+
+  def microsecond : Int32
+    nanosecond // 1000
+  end
+
+  def millisecond : Int32
+    nanosecond // 1_000_000
+  end
+
+  def subsecond? : Bool
+    nanosecond > 0
+  end
+
+  def submillisecond? : Bool
+    nanosecond < 1_000_000
+  end
+
+  def_equals_and_hash @nanoseconds
+
+  def to_s(io : IO) : Nil
+    io << hour.to_s.rjust(2, '0') << ':' << minute.to_s.rjust(2, '0') << ':' << second.to_s.rjust(2, '0')
+    io << '.' << nanosecond.to_s.rjust(9, '0').rstrip('0') unless nanosecond.zero?
+  end
+
   def to_span : Time::Span
-    nanosecond = @microsecond * 1000
-    Time::Span.new(hours: @hour, minutes: @minute, seconds: @second, nanoseconds: nanosecond)
+    Time::Span.new(seconds: @nanoseconds // 1_000_000_000, nanoseconds: nanosecond)
   end
 
   # :nodoc:
   def to_unsafe
-    time = LibDuckDB::Time.new
-    time.micros = self.to_span.total_microseconds.to_i64
-    time
+    raise Exception.new("TIME binding would lose nanoseconds; cast a TIME_NS parameter instead") unless @nanoseconds % 1000 == 0
+    LibDuckDB::Time.new(micros: @nanoseconds // 1000)
   end
 end

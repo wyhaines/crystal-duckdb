@@ -14,6 +14,7 @@ module DuckDB
     type DataChunk = Void*
     type Vector = Void*
     type LogicalType = Void*
+    type Value = Void*
 
     enum State
       Success = 0
@@ -144,6 +145,42 @@ module DuckDB
     struct HugeInt
       lower : UInt64
       upper : Int64
+    end
+
+    struct UHugeInt
+      lower : UInt64
+      upper : UInt64
+    end
+
+    struct TimeNS
+      nanos : Int64
+    end
+
+    struct TimestampS
+      seconds : Int64
+    end
+
+    struct TimestampMS
+      millis : Int64
+    end
+
+    struct TimestampNS
+      nanos : Int64
+    end
+
+    struct BigNum
+      data : UInt8*
+      size : Idx
+      is_negative : CBool
+    end
+
+    struct TimeTZ
+      bits : UInt64
+    end
+
+    struct TimeTZParts
+      time : TimeParts
+      offset : Int32
     end
 
     struct Decimal
@@ -283,6 +320,21 @@ module DuckDB
     fun from_time = duckdb_from_time(time : Time) : TimeParts
     fun is_finite_date = duckdb_is_finite_date(date : Date) : CBool
     fun is_finite_timestamp = duckdb_is_finite_timestamp(timestamp : Timestamp) : CBool
+
+    fun from_time_tz = duckdb_from_time_tz(time : TimeTZ) : TimeTZParts
+    fun create_time_tz = duckdb_create_time_tz(micros : Int64, offset : Int32) : TimeTZ
+    fun bind_decimal = duckdb_bind_decimal(statement : PreparedStatement, index : Idx, value : Decimal) : State
+    fun bind_uhugeint = duckdb_bind_uhugeint(statement : PreparedStatement, index : Idx, value : UHugeInt) : State
+    fun bind_value = duckdb_bind_value(statement : PreparedStatement, index : Idx, value : Value) : State
+    fun create_uuid = duckdb_create_uuid(value : UHugeInt) : Value
+    fun create_time_ns = duckdb_create_time_ns(value : TimeNS) : Value
+    fun create_time_tz_value = duckdb_create_time_tz_value(value : TimeTZ) : Value
+    fun create_timestamp_s = duckdb_create_timestamp_s(value : TimestampS) : Value
+    fun create_timestamp_ms = duckdb_create_timestamp_ms(value : TimestampMS) : Value
+    fun create_timestamp_ns = duckdb_create_timestamp_ns(value : TimestampNS) : Value
+    fun create_timestamp_tz = duckdb_create_timestamp_tz(value : Timestamp) : Value
+    fun create_bignum = duckdb_create_bignum(value : BigNum) : Value
+    fun destroy_value = duckdb_destroy_value(value : Value*) : Void
 
     # # Memory allocation
 
