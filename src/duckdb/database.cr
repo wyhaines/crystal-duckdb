@@ -24,7 +24,7 @@ class DuckDB::InstanceCache
         raise ex
       ensure
         LibDuckDB.free(error) unless error.null?
-        LibDuckDB.destroy_instance_cache(pointerof(@@cache)) if @@users == 0
+        destroy_cache if @@users == 0
       end
     end
   end
@@ -33,8 +33,16 @@ class DuckDB::InstanceCache
     @@mutex.synchronize do
       LibDuckDB.close(database)
       @@users -= 1
-      LibDuckDB.destroy_instance_cache(pointerof(@@cache)) if @@users == 0
+      destroy_cache if @@users == 0
     end
+  end
+
+  private def self.destroy_cache
+    # Taking a class variable's address can lazily reinitialize it. Let the C
+    # destructor clear a local handle, then store that cleared value back.
+    cache = @@cache
+    LibDuckDB.destroy_instance_cache(pointerof(cache))
+    @@cache = cache
   end
 end
 

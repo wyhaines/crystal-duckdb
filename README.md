@@ -416,7 +416,7 @@ export LD_LIBRARY_PATH="$LIBRARY_PATH"
 crystal spec
 ```
 
-Every Crystal block in this README is a standalone program. `scripts/check-readme.sh` extracts, compiles, and runs each one in a temporary directory, then removes it. Run it with the same library paths. CI can add this after `scripts/ci-local.sh`, once per DuckDB matrix version:
+Every Crystal block in this README is a standalone program. `scripts/check-readme.sh` extracts, compiles, and runs each one in a temporary directory, then removes it. CI runs this after the specs in every DuckDB/Crystal matrix cell, including the minimum Crystal version. Run it locally with the same library paths:
 
 ```sh
 LIBRARY_PATH="$PWD/.tmp/duckdb/duckdb-2.0.0" \

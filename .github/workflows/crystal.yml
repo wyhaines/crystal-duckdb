@@ -27,3 +27,8 @@ jobs:
           crystal: ${{ matrix.crystal }}
       - name: Download and verify DuckDB, install shards, and run specs
         run: scripts/ci-local.sh "${{ matrix.duckdb }}" "$RUNNER_TEMP/duckdb"
+      - name: Check README programs
+        run: |
+          export LIBRARY_PATH="$RUNNER_TEMP/duckdb/duckdb-${{ matrix.duckdb }}"
+          export LD_LIBRARY_PATH="$LIBRARY_PATH"
+          scripts/check-readme.sh

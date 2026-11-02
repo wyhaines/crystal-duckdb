@@ -28,7 +28,7 @@ All notable changes to this shard are documented here, following [Keep a Changel
 - Exact scalar parameter bindings and Appender support for Decimal, UUID, UInt128, BigNum, TimeTZ, and temporal resolution variants. Extended Appender creation accepts separate literal table, schema, and catalog arguments; `closed?` exposes its state. Nested arrays/hashes remain read-only values.
 - `Timestamp#to_span` returns the exact duration since the Unix epoch, with range and infinity checks. `Connection#driver_name` identifies the driver as `duckdb` for current crystal-db APIs.
 - Optional `require "duckdb/big"` for Decimal-to-BigDecimal and BigNum-to-BigInt conversions; ordinary reads and formatting do not require GMP.
-- Linux CI over DuckDB 1.5.6/2.0.0 and minimum/latest Crystal, digest-checked official library downloads, manual workflow dispatch, and `scripts/ci-local.sh` for local reproduction.
+- Linux CI over DuckDB 1.5.6/2.0.0 and minimum/latest Crystal, with specs and README programs checked in every cell, digest-checked official library downloads, manual workflow dispatch, and `scripts/ci-local.sh` for local reproduction.
 - Regression specs with native-handle counters, release/read/chunk/Appender/leak benchmarks, maintained read-breakdown and streaming-memory programs, a README program checker, and a shard/runtime version consistency spec.
 
 ### Changed
@@ -46,6 +46,7 @@ All notable changes to this shard are documented here, following [Keep a Changel
 - In-memory URI parsing no longer creates `[:memory:]` files, resolving upstream [PR #4](https://github.com/amauryt/crystal-duckdb/pull/4). Literal plus signs in file paths survive URI decoding, including named-memory URI handling.
 - The dependency constraint permits crystal-db 0.13.1–0.15.x instead of forcing other drivers onto older versions, resolving upstream [issue #5](https://github.com/amauryt/crystal-duckdb/issues/5). Unprepared result creation uses the native DuckDB connection, resolving upstream [issue #6](https://github.com/amauryt/crystal-duckdb/issues/6).
 - Independent database instances no longer hide or lose committed writes to the same file; pools and standalone connections share the appropriate native database owner.
+- Closing the last file or named-memory database reliably destroys the instance cache. The C destructor receives a local handle to avoid class-variable reinitialization leaking the live cache.
 - Native results, prepared statements, chunks, logical types (including nested types), configuration/open error strings, Appender handles, and temporary binding values are released on success, early exit, close, and error paths. ResultSet initialization and close now participate in crystal-db ownership, preventing exhausted one-connection pools and uncached-statement leaks.
 - Prepare and unprepared-exec failures are checked and raised. Binding failures without a native error string get a useful driver error instead of an unrelated null-pointer exception. Reused statements cannot silently retain omitted arguments.
 - NULL and SQLNULL reads work on DuckDB 2.0, including mixed result columns. Embedded NUL bytes survive bound/appended/returned strings, with length-aware access rather than C-string truncation.
