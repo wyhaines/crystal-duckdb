@@ -221,7 +221,7 @@ class DuckDB::AppendColumn
     {% native = kind_info[1] %}
     {% method = kind_info[2] %}
       when LibDuckDB::Type::{{kind.id}}
-        LibDuckDB.{{method.id}}(appender, get(row, {{native}}))
+        LibDuckDB.{{method.id}}(appender, DuckDB.c_arg(get(row, {{native}})))
     {% end %}
     when .varchar?, .blob?
       ptr, length = VectorView.new(@vector).string_data(row.to_i64)

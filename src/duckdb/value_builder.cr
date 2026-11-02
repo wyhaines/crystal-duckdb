@@ -370,12 +370,12 @@ class DuckDB::ValueBuilder
   end
 
   def self.scalar(value : Bool) : LibDuckDB::Value
-    LibDuckDB.create_bool(value ? 1_u8 : 0_u8)
+    LibDuckDB.create_bool(DuckDB.c_arg(value))
   end
 
   {% for name in ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"] %}
     def self.scalar(value : {{name.id}}) : LibDuckDB::Value
-      LibDuckDB.create_{{name.id.downcase}}(value)
+      LibDuckDB.create_{{name.id.downcase}}(DuckDB.c_arg(value))
     end
   {% end %}
 

@@ -2,6 +2,13 @@ module DuckDB
   @[Link("duckdb")]
   lib LibDuckDB
     alias CBool = UInt8
+    # Crystal passes 8- and 16-bit integer arguments to C without sign or zero
+    # extension (only Bool gets zeroext), and Apple arm64 requires the caller to
+    # extend them to 32 bits: a negative Int8 arrives as a large positive value.
+    # So parameters of C type bool, int8_t, int16_t, uint8_t and uint16_t are
+    # declared 32 bits wide; pass values through `DuckDB.c_arg`. Struct fields
+    # and return values keep their real widths.
+    alias CBoolArg = UInt32
 
     alias Idx = UInt64
     type Database = Void*
@@ -358,9 +365,9 @@ module DuckDB
     fun create_map_value = duckdb_create_map_value(type : LogicalType, keys : Value*, values : Value*, count : Idx) : Value
     fun create_union_value = duckdb_create_union_value(type : LogicalType, tag : Idx, value : Value) : Value
     fun create_null_value = duckdb_create_null_value : Value
-    fun create_bool = duckdb_create_bool(value : CBool) : Value
+    fun create_bool = duckdb_create_bool(value : CBoolArg) : Value
     {% for name in ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"] %}
-      fun create_{{name.id.downcase}} = duckdb_create_{{name.id.downcase}}(value : {{name.id}}) : Value
+      fun create_{{name.id.downcase}} = duckdb_create_{{name.id.downcase}}(value : {{ ({"Int8" => "Int32", "Int16" => "Int32", "UInt8" => "UInt32", "UInt16" => "UInt32"}[name] || name).id }}) : Value
     {% end %}
     fun create_hugeint = duckdb_create_hugeint(value : HugeInt) : Value
     fun create_uhugeint = duckdb_create_uhugeint(value : UHugeInt) : Value
@@ -394,14 +401,14 @@ module DuckDB
     fun clear_bindings = duckdb_clear_bindings(prepared_statement : PreparedStatement) : State
 
     # binds parameters to prepared statement
-    fun bind_boolean = duckdb_bind_boolean(prepared_statement : PreparedStatement, param_idx : Idx, val : CBool) : State
-    fun bind_int8 = duckdb_bind_int8(prepared_statement : PreparedStatement, param_idx : Idx, val : Int8) : State
-    fun bind_int16 = duckdb_bind_int16(prepared_statement : PreparedStatement, param_idx : Idx, val : Int16) : State
+    fun bind_boolean = duckdb_bind_boolean(prepared_statement : PreparedStatement, param_idx : Idx, val : CBoolArg) : State
+    fun bind_int8 = duckdb_bind_int8(prepared_statement : PreparedStatement, param_idx : Idx, val : Int32) : State
+    fun bind_int16 = duckdb_bind_int16(prepared_statement : PreparedStatement, param_idx : Idx, val : Int32) : State
     fun bind_int32 = duckdb_bind_int32(prepared_statement : PreparedStatement, param_idx : Idx, val : Int32) : State
     fun bind_int64 = duckdb_bind_int64(prepared_statement : PreparedStatement, param_idx : Idx, val : Int64) : State
     fun bind_hugeint = duckdb_bind_hugeint(prepared_statement : PreparedStatement, param_idx : Idx, val : HugeInt) : State
-    fun bind_uint8 = duckdb_bind_uint8(prepared_statement : PreparedStatement, param_idx : Idx, val : UInt8) : State
-    fun bind_uint16 = duckdb_bind_uint16(prepared_statement : PreparedStatement, param_idx : Idx, val : UInt16) : State
+    fun bind_uint8 = duckdb_bind_uint8(prepared_statement : PreparedStatement, param_idx : Idx, val : UInt32) : State
+    fun bind_uint16 = duckdb_bind_uint16(prepared_statement : PreparedStatement, param_idx : Idx, val : UInt32) : State
     fun bind_uint32 = duckdb_bind_uint32(prepared_statement : PreparedStatement, param_idx : Idx, val : UInt32) : State
     fun bind_uint64 = duckdb_bind_uint64(prepared_statement : PreparedStatement, param_idx : Idx, val : UInt64) : State
     fun bind_float = duckdb_bind_float(prepared_statement : PreparedStatement, param_idx : Idx, val : Float32) : State
@@ -435,17 +442,17 @@ module DuckDB
     fun appender_begin_row = duckdb_appender_begin_row(appender : Appender) : State
     fun appender_end_row = duckdb_appender_end_row(appender : Appender) : State
 
-    fun append_bool = duckdb_append_bool(appender : Appender, value : CBool) : State
+    fun append_bool = duckdb_append_bool(appender : Appender, value : CBoolArg) : State
 
-    fun append_int8 = duckdb_append_int8(appender : Appender, value : Int8) : State
-    fun append_int16 = duckdb_append_int16(appender : Appender, value : Int16) : State
+    fun append_int8 = duckdb_append_int8(appender : Appender, value : Int32) : State
+    fun append_int16 = duckdb_append_int16(appender : Appender, value : Int32) : State
     fun append_int32 = duckdb_append_int32(appender : Appender, value : Int32) : State
     fun append_int64 = duckdb_append_int64(appender : Appender, value : Int64) : State
       
     fun append_hugeint = duckdb_append_hugeint(appender : Appender, value : HugeInt) : State
 
-    fun append_uint8 = duckdb_append_uint8(appender : Appender, value : UInt8) : State
-    fun append_uint16 = duckdb_append_uint16(appender : Appender, value : UInt16) : State
+    fun append_uint8 = duckdb_append_uint8(appender : Appender, value : UInt32) : State
+    fun append_uint16 = duckdb_append_uint16(appender : Appender, value : UInt32) : State
     fun append_uint32 = duckdb_append_uint32(appender : Appender, value : UInt32) : State
     fun append_uint64 = duckdb_append_uint64(appender : Appender, value : UInt64) : State
 
@@ -466,5 +473,30 @@ module DuckDB
     fun appender_close = duckdb_appender_close(appender : Appender) : State
 
     fun appender_destroy = duckdb_appender_destroy(appender : Appender*) : State
+  end
+
+  # Widens a C argument to the 32-bit width its `LibDuckDB` parameter is
+  # declared with (see `LibDuckDB::CBoolArg`); other values pass unchanged.
+  @[AlwaysInline]
+  def self.c_arg(value : Bool) : UInt32
+    value ? 1_u32 : 0_u32
+  end
+
+  # :ditto:
+  @[AlwaysInline]
+  def self.c_arg(value : Int8 | Int16) : Int32
+    value.to_i32
+  end
+
+  # :ditto:
+  @[AlwaysInline]
+  def self.c_arg(value : UInt8 | UInt16) : UInt32
+    value.to_u32
+  end
+
+  # :ditto:
+  @[AlwaysInline]
+  def self.c_arg(value)
+    value
   end
 end

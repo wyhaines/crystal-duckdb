@@ -136,12 +136,12 @@ class DuckDB::Statement < DB::Statement
   end
 
   private def bind_arg(index, value : Bool)
-    check LibDuckDB.bind_boolean(self, index, value ? 1_u8 : 0_u8)
+    check LibDuckDB.bind_boolean(self, index, DuckDB.c_arg(value))
   end
 
   {% for name in ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"] %}
     private def bind_arg(index, value : {{name.id}})
-      check LibDuckDB.bind_{{name.id.downcase}}(self, index, value)
+      check LibDuckDB.bind_{{name.id.downcase}}(self, index, DuckDB.c_arg(value))
     end
   {% end %}
 

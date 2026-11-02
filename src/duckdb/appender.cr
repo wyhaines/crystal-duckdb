@@ -63,7 +63,7 @@ class DuckDB::Appender
 
   # Appends one value to the current row; raises on conversion failure.
   def <<(value : Bool)
-    append(value) { LibDuckDB.append_bool(self, value ? 1_u8 : 0_u8) }
+    append(value) { LibDuckDB.append_bool(self, DuckDB.c_arg(value)) }
     self
   end
 
@@ -135,7 +135,7 @@ class DuckDB::Appender
   {% for name in ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64"] %}
     # Appends one integer to the current row.
     def <<(value : {{name.id}})
-      append(value) { LibDuckDB.append_{{name.id.downcase}}(self, value) }
+      append(value) { LibDuckDB.append_{{name.id.downcase}}(self, DuckDB.c_arg(value)) }
       self
     end
   {% end %}
