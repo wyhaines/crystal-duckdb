@@ -4,23 +4,25 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
+    name: DuckDB ${{ matrix.duckdb }} / Crystal ${{ matrix.crystal }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-    runs-on: macos-latest
-    env:
-      DYLD_LIBRARY_PATH: /usr/local/lib/
-      CRYSTAL_LIBRARY_PATH: /opt/homebrew/lib/
+      matrix:
+        # spec/spec_helper.cr uses File.delete?, introduced in Crystal 1.5.0.
+        crystal: [latest, '1.5.0']
+        # Archive names and SHA-256 digests are pinned in scripts/ci-local.sh.
+        duckdb: ['1.5.6', '2.0.0']
     steps:
-      - name: Install duckdb and crystal
-        run: |
-          brew update
-          brew install duckdb
-          brew install crystal
-      - name: Check out repository code
-        uses: actions/checkout@v2
-      - name: Install dependencies
-        run: shards install
-      - name: Run tests
-        run: crystal spec
+      - uses: actions/checkout@v7.0.1
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1.9.5
+        with:
+          crystal: ${{ matrix.crystal }}
+      - name: Download and verify DuckDB, install shards, and run specs
+        run: scripts/ci-local.sh "${{ matrix.duckdb }}" "$RUNNER_TEMP/duckdb"

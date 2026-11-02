@@ -12,6 +12,6 @@ crystalline:
 authors:
   - Amaury Trujillo
 
-crystal: ">=1.0.0"
+crystal: ">= 1.5.0"
 
 license: MIT
