@@ -149,7 +149,7 @@ end
 
 Pass DuckDB settings and crystal-db pool options in the URI. Invalid engine settings raise `DuckDB::Exception`. For a file that already exists, `access_mode=read_only` opens it read-only. See the [DuckDB configuration reference](https://duckdb.org/docs/stable/configuration/overview).
 
-**Security note:** every URI query parameter that is not a crystal-db option becomes a DuckDB setting, except the driver's `stream_results` option. This includes settings such as `allow_unsigned_extensions` and `enable_external_access`. Connection URIs must come from trusted configuration. If accepting user-supplied options, apply an explicit allow-list; configuration filtering does not sandbox SQL.
+**Security note:** every URI query parameter that is not a crystal-db option becomes a DuckDB setting, except the driver's own `stream_results` and `deduplicate_strings` options. This includes settings such as `allow_unsigned_extensions` and `enable_external_access`. Connection URIs must come from trusted configuration. If accepting user-supplied options, apply an explicit allow-list; configuration filtering does not sandbox SQL.
 
 ```crystal
 require "duckdb"
@@ -449,7 +449,33 @@ The memory comparison generates 30 million rows with the same five types, consum
 | 1.5.6 | 2.42 s, 1.15 GB | 1.87–1.95 s, 45–49 MB |
 | 2.0.0 | 2.13 s, 1.17 GB | 1.80–1.86 s, 104–110 MB |
 
-See [bench/README.md](bench/README.md) for release-build commands, library paths, and reproduction using `read_bench.cr`, `read_breakdown.cr`, and `stream_memory.cr`. The old-reader comparison requires a separate baseline build from `1adee51`; current benchmarks measure the current driver.
+See [bench/README.md](bench/README.md) for release-build commands, library paths, and reproduction using `read_bench.cr`, `read_breakdown.cr`, `stream_memory.cr`, `string_bench.cr`, and `small_string_bench.cr`. The old-reader comparison requires a separate baseline build from `1adee51`; current benchmarks measure the current driver.
+
+### Repeated strings
+
+Every VARCHAR value read through `read(String)`, `read`, or `Vector#string` is a new Crystal `String`. When a column repeats a small set of values, set `deduplicate_strings=true` in the URI, or `connection.as(DuckDB::Connection).deduplicate_strings = true` before running a query. Equal values within one result then share one `String`, which is safe because Crystal strings are immutable. ENUM values already share their dictionary strings, and BLOBs are always copied.
+
+```crystal
+require "duckdb"
+
+DB.connect "duckdb::memory:?deduplicate_strings=true" do |cnn|
+  values = [] of String
+  cnn.query("SELECT 'red' FROM range(3)") do |rs|
+    rs.each { values << rs.read(String) }
+  end
+  puts values[0].same?(values[2]) # => true
+end
+```
+
+Each VARCHAR column has its own cache, including VARCHAR inside LIST, STRUCT, MAP and UNION values, and the result frees it when it closes. A cache starts small and holds at most 16,384 strings and about 4 MiB of text. When it reaches either limit, it stops caching for the rest of the result.
+
+The option is off by default because it doesn't always pay. In `string_bench.cr`, 5-million-row reads with 16 distinct values were 1.5–2.6× faster under Boehm. Under gcry, some medium- and high-cardinality cases were up to 11% slower. Reading 20,000 one-row results of 20 VARCHAR columns took 1.3–1.9× as long.
+
+### Garbage collector
+
+In `string_bench.cr` under Boehm, Crystal's default collector, collection takes 37–58% of the time spent copying VARCHAR values. The driver also works with [gcry](https://github.com/sdogruyol/gcry). The full spec suite passes under gcry v0.39.0 on DuckDB 1.5.6 and 2.0.0, including the four-worker execution-context specs. In the same benchmarks gcry read VARCHAR values 1.3–2× faster, and `read_bench.cr`'s mixed five-column read 14–27% faster; appends were about the same.
+
+To use it, require `gcry` before the driver and build with `-Dgc_none` (Crystal 1.21 or later). Keep its nursery disabled. Its parallel support is experimental. The driver doesn't depend on either collector. These benchmarks allocate heavily against a small live heap, so measure your own application before switching.
 
 ## Known issues
 

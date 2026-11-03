@@ -25,11 +25,12 @@ class DuckDB::ResultSet < DB::ResultSet
     @native_alive = true
     begin
       check(state)
+      deduplicate_strings = connection.deduplicate_strings
       LibDuckDB.column_count(self).times do |index|
         ptr = LibDuckDB.column_name(self, index)
         name = ptr.null? ? "" : String.new(ptr)
         @column_names << name
-        @readers << ColumnReader.build(LibDuckDB.column_logical_type(self, index), name)
+        @readers << ColumnReader.build(LibDuckDB.column_logical_type(self, index), name, deduplicate_strings)
       end
       connection.register_result(self, streaming)
       statement.result_opened(self) if statement.is_a?(Statement)

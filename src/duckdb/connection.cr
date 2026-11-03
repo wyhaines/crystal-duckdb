@@ -6,7 +6,10 @@ class DuckDB::Connection < DB::Connection
   # Opt in for subsequent prepared and unprepared queries. Exec stays materialized.
   property stream_results : Bool = false
 
-  record Options, filename : String, config_params : Hash(String, String), stream_results : Bool = false do
+  # Reuse immutable VARCHAR strings within subsequent results. Off by default.
+  property deduplicate_strings : Bool = false
+
+  record Options, filename : String, config_params : Hash(String, String), stream_results : Bool = false, deduplicate_strings : Bool = false do
     CRYSTAL_DB_PARAM_KEYS = %w[
       initial_pool_size
       max_pool_size
@@ -18,7 +21,7 @@ class DuckDB::Connection < DB::Connection
       prepared_statements_cache
     ]
 
-    def initialize(@filename, @config_params, @stream_results = false)
+    def initialize(@filename, @config_params, @stream_results = false, @deduplicate_strings = false)
     end
 
     def self.from_uri(uri : URI)
@@ -29,18 +32,18 @@ class DuckDB::Connection < DB::Connection
       params = HTTP::Params.parse(uri.query || "")
       config_params = Hash(String, String).new
       params.each do |param|
-        config_params[param[0]] = param[1] unless CRYSTAL_DB_PARAM_KEYS.includes?(param[0]) || param[0] == "stream_results"
+        config_params[param[0]] = param[1] unless CRYSTAL_DB_PARAM_KEYS.includes?(param[0]) || param[0] == "stream_results" || param[0] == "deduplicate_strings"
       end
-      Options.new(filename, config_params, DB.fetch_bool(params, "stream_results", false))
+      Options.new(filename, config_params, DB.fetch_bool(params, "stream_results", false), DB.fetch_bool(params, "deduplicate_strings", false))
     end
   end
 
   def initialize(options : ::DB::Connection::Options, duckdb_options : Options)
-    initialize(options, Database.new(duckdb_options), duckdb_options.stream_results)
+    initialize(options, Database.new(duckdb_options), duckdb_options.stream_results, duckdb_options.deduplicate_strings)
   end
 
   # :nodoc:
-  def initialize(options : ::DB::Connection::Options, @database : Database, @stream_results : Bool = false)
+  def initialize(options : ::DB::Connection::Options, @database : Database, @stream_results : Bool = false, @deduplicate_strings : Bool = false)
     super(options)
     @conn = @database.connect
   end

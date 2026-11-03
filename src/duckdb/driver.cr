@@ -25,7 +25,7 @@ class DuckDB::Driver < DB::Driver
             database = @database = Database.new(@duckdb_options, retained: @pooled)
           end
           begin
-            return Connection.new(@options, database, @duckdb_options.stream_results)
+            return Connection.new(@options, database, @duckdb_options.stream_results, @duckdb_options.deduplicate_strings)
           rescue Database::ClosedError
             # The last standalone connection can disconnect after closed?
             # but before connect takes the owner's mutex. Retry a fresh owner.

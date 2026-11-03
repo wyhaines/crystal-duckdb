@@ -15,36 +15,36 @@ abstract class DuckDB::ColumnReader
   getter row_count = 0_i64
   getter dictionary = [] of String
 
-  def self.build(logical_type : LibDuckDB::LogicalType, name : String) : ColumnReader
+  def self.build(logical_type : LibDuckDB::LogicalType, name : String, deduplicate_strings : Bool = false) : ColumnReader
     {% begin %}
     case LibDuckDB.get_type_id(logical_type)
     {% for kind, scalar in {BOOLEAN: Bool, TINYINT: Int8, SMALLINT: Int16, INTEGER: Int32, BIGINT: Int64, UTINYINT: UInt8, USMALLINT: UInt16, UINTEGER: UInt32, UBIGINT: UInt64, HUGEINT: Int128, UHUGEINT: UInt128, UUID: UUID, DECIMAL: DuckDB::Decimal, BIGNUM: DuckDB::BigNum, TIME_TZ: DuckDB::TimeTZ, FLOAT: Float32, DOUBLE: Float64, VARCHAR: String, BLOB: Bytes, DATE: DuckDB::Date, TIME: DuckDB::TimeOfDay, TIMESTAMP: DuckDB::Timestamp, INTERVAL: DuckDB::Interval} %}
     when .{{kind.id.downcase}}?
-      ScalarColumnReader({{scalar}}).new(logical_type, name)
+      ScalarColumnReader({{scalar}}).new(logical_type, name, deduplicate_strings)
     {% end %}
     when .enum?, .bit?
-      ScalarColumnReader(String).new(logical_type, name)
+      ScalarColumnReader(String).new(logical_type, name, deduplicate_strings)
     when .geometry?
-      ScalarColumnReader(Bytes).new(logical_type, name)
+      ScalarColumnReader(Bytes).new(logical_type, name, deduplicate_strings)
     when .time_ns?
-      ScalarColumnReader(TimeOfDay).new(logical_type, name)
+      ScalarColumnReader(TimeOfDay).new(logical_type, name, deduplicate_strings)
     when .timestamp_s?, .timestamp_ms?, .timestamp_ns?, .timestamp_tz?, .timestamp_tz_ns?
-      ScalarColumnReader(Timestamp).new(logical_type, name)
+      ScalarColumnReader(Timestamp).new(logical_type, name, deduplicate_strings)
     when .list?, .array?
-      ListColumnReader.new(logical_type, name)
+      ListColumnReader.new(logical_type, name, deduplicate_strings)
     when .struct?
-      StructColumnReader.new(logical_type, name)
+      StructColumnReader.new(logical_type, name, deduplicate_strings)
     when .map?
-      MapColumnReader.new(logical_type, name)
+      MapColumnReader.new(logical_type, name, deduplicate_strings)
     when .union?
-      UnionColumnReader.new(logical_type, name)
+      UnionColumnReader.new(logical_type, name, deduplicate_strings)
     else
-      UnsupportedColumnReader.new(logical_type, name)
+      UnsupportedColumnReader.new(logical_type, name, deduplicate_strings)
     end
     {% end %}
   end
 
-  def initialize(@logical_type : LibDuckDB::LogicalType, @name : String)
+  def initialize(@logical_type : LibDuckDB::LogicalType, @name : String, deduplicate_strings : Bool = false)
     @type = LibDuckDB.get_type_id(@logical_type)
     case @type
     when .decimal?
@@ -63,17 +63,17 @@ abstract class DuckDB::ColumnReader
       end
     when .list?, .map?
       # MAP's physical child is STRUCT(key, value).
-      @children << ColumnReader.build(LibDuckDB.list_type_child_type(@logical_type), "#{@name}[]")
+      @children << ColumnReader.build(LibDuckDB.list_type_child_type(@logical_type), "#{@name}[]", deduplicate_strings)
     when .array?
       @array_size = LibDuckDB.array_type_array_size(@logical_type)
-      @children << ColumnReader.build(LibDuckDB.array_type_child_type(@logical_type), "#{@name}[]")
+      @children << ColumnReader.build(LibDuckDB.array_type_child_type(@logical_type), "#{@name}[]", deduplicate_strings)
     when .struct?
       LibDuckDB.struct_type_child_count(@logical_type).times do |index|
         ptr = LibDuckDB.struct_type_child_name(@logical_type, index)
         begin
           child_name = String.new(ptr)
           @child_names << child_name
-          @children << ColumnReader.build(LibDuckDB.struct_type_child_type(@logical_type, index), "#{@name}.#{child_name}")
+          @children << ColumnReader.build(LibDuckDB.struct_type_child_type(@logical_type, index), "#{@name}.#{child_name}", deduplicate_strings)
         ensure
           LibDuckDB.free(ptr)
         end
@@ -84,7 +84,7 @@ abstract class DuckDB::ColumnReader
         begin
           child_name = String.new(ptr)
           @child_names << child_name
-          @children << ColumnReader.build(LibDuckDB.union_type_member_type(@logical_type, index), "#{@name}.#{child_name}")
+          @children << ColumnReader.build(LibDuckDB.union_type_member_type(@logical_type, index), "#{@name}.#{child_name}", deduplicate_strings)
         ensure
           LibDuckDB.free(ptr)
         end
@@ -156,6 +156,21 @@ end
 
 # :nodoc:
 class DuckDB::ScalarColumnReader(T) < DuckDB::ColumnReader
+  @string_cache : StringCache? = nil
+
+  def initialize(logical_type : LibDuckDB::LogicalType, name : String, deduplicate_strings : Bool = false)
+    super(logical_type, name, deduplicate_strings)
+    {% if T == String %}
+      @string_cache = StringCache.new if deduplicate_strings && @type.varchar?
+    {% end %}
+  end
+
+  def close
+    @string_cache.try &.clear
+    @string_cache = nil
+    super
+  end
+
   def read_value(row : Int64) : T
     {% if T == Bool %}
       @vector.get(row, UInt8) != 0
@@ -179,7 +194,11 @@ class DuckDB::ScalarColumnReader(T) < DuckDB::ColumnReader
           end
         end
       else
-        @vector.string(row)
+        if cache = @string_cache
+          cache.read(@vector, row)
+        else
+          @vector.string(row)
+        end
       end
     {% elsif T == Bytes %}
       @vector.blob(row)

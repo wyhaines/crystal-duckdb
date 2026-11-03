@@ -58,3 +58,57 @@ Repeat against each library by changing `LIBRARY_PATH` and `LD_LIBRARY_PATH` and
 ## Other programs
 
 `chunk_bench.cr` compares copied-string chunks with typed ResultSet reads on the generated five-column query. `append_bench.cr` measures scalar Appender rows for BIGINT, VARCHAR, DECIMAL, and TIMESTAMP. `leak_check.cr` samples Linux process RSS over repeated successful and failing query/exec operations. Build each with the same release command and cache guard, substituting its filename. Their arguments and defaults are documented in the source. RSS plateaus over these bounded workloads complement the spec suite's native-handle counters; they do not establish behavior for every workload.
+
+## VARCHAR allocation and GC: string_bench.cr
+
+Build `bench/string_bench.cr` with the release environment and compile lock above.
+It defaults to five million rows, three interleaved repeats per mode, lengths 12
+(DuckDB inline), 32 and 200 bytes, and cardinalities 16, 10,000 and all-distinct.
+Each table is generated before timing. Every sample reports materialized SELECT
+execution separately from consumption, plus their total, a checked byte count,
+GC allocation/heap statistics before and after, collection count and collection
+time. Boehm collection events and gcry's pause counters provide collection time;
+allocator work outside collection remains in consumption time.
+
+```sh
+taskset -c 12-15 .tmp/string_bench 5000000 3 all on all
+taskset -c 12-15 .tmp/string_bench 5000000 3 all off typed
+taskset -c 12-15 .tmp/string_bench 5000000 3 all on typed all deduplicate_strings=true
+```
+
+`deduplicate_strings` is a core driver option, off by default. The same binary
+runs both policies; no extension require or separate cache wrapper is needed.
+Its per-column table is allocated at the first non-NULL read, starts at 64 slots,
+and doubles at half full up to 32,768 slots. Entries retain their hash for growth;
+no borrowed DuckDB pointer is retained.
+
+Arguments are rows, repeats, length (`all`, `12`, `32`, `200`), GC (`on`, `off`),
+comma-separated modes (or `all`), cardinality (`all`, `16`, `10000`, `distinct`),
+and optional connection URI parameters. Modes are `fetch`, `iterate`, `typed`
+(`read(String)`), `nullable` (`read(String?)`), `untyped` (`read`), `vector`
+(`Vector#string`), `bytes` (`with_string_bytes`), `raw` (internal `VectorView#string`,
+without public guards), and `allocate` (copies one Crystal source String, without
+querying DuckDB). Except for fetch/iteration, checksums sum bytesizes, so untyped
+reads add no hashing or formatting. GC is explicitly collected before each
+sample, outside timing; disabled runs re-enable it after each sample. A disabled
+sample can retain over 1 GB of garbage at length 200. This is an allocation
+microbenchmark: real applications with larger live heaps can collect differently.
+
+Run one benchmark or compile at a time, alternating baseline/current and
+collector order across fresh processes. Report medians and min/max spreads,
+including consumption separately when execution noise masks a small difference.
+For gcry, use a temporary wrapper that requires the pinned `gcry/src/gcry` before
+requiring the benchmark, build with `-Dgc_none`, and run with
+`GCRY_NURSERY=0`.
+No collector dependency is needed in this driver's shard.yml. gcry requires
+Crystal >= 1.21; record its exact commit and configuration with the results.
+
+## Many small string results: small_string_bench.cr
+
+Build with the same guarded release environment. Run off and on in alternating
+order, for example `.tmp/small_string_bench 20000 false` and
+`.tmp/small_string_bench 20000 true`. Each execution of a cached prepared SELECT
+returns one row of twenty VARCHAR columns. Output includes elapsed time,
+GC.stats total allocation and a checked byte count; connection setup,
+preparation and explicit pre-run collection are excluded. This exposes table
+setup costs that a five-million-row scan amortizes away.
