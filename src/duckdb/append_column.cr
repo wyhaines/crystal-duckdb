@@ -9,9 +9,16 @@ class DuckDB::AppendColumn
   @vector = Pointer(Void).null.as(LibDuckDB::Vector)
   @data = Pointer(Void).null
   @validity = Pointer(UInt64).null
+  @direct = false
+
+  # The families written (and replayed) directly; they alone take NULL directly.
+  # DuckDB copies a NULL STRUCT or ARRAY row's children, which this chunk never
+  # writes, so every other NULL goes through append_null.
+  DIRECT_TYPES = {% begin %}[{% for kind in %w[BOOLEAN TINYINT SMALLINT INTEGER BIGINT HUGEINT UTINYINT USMALLINT UINTEGER UBIGINT UHUGEINT FLOAT DOUBLE DATE TIME TIME_NS TIMESTAMP TIMESTAMP_S TIMESTAMP_MS TIMESTAMP_NS TIMESTAMP_TZ TIMESTAMP_TZ_NS INTERVAL VARCHAR BLOB DECIMAL UUID] %}LibDuckDB::Type::{{kind.id}}, {% end %}]{% end %}
 
   def initialize(logical : LibDuckDB::LogicalType)
     @type = LibDuckDB.get_type_id(logical)
+    @direct = DIRECT_TYPES.includes?(@type)
     if @type.decimal?
       @scale = LibDuckDB.decimal_scale(logical)
       @width = LibDuckDB.decimal_width(logical)
@@ -28,6 +35,7 @@ class DuckDB::AppendColumn
 
   # Columnar loading deliberately accepts only exact destination families.
   def accepts?(column : Indexable(T)) : Bool forall T
+    return false unless @direct
     {% for member in T.union_types %}
       {% if member == Nil %}
       {% elsif member < Int %}
@@ -65,6 +73,7 @@ class DuckDB::AppendColumn
 
   @[AlwaysInline]
   def write(value : Nil, row : Int32) : Bool
+    return false unless @direct
     @validity[row // 64] &= ~(1_u64 << (row % 64))
     true
   end
